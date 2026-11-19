@@ -12,7 +12,7 @@
 
 ## Архитектурное правило
 
-- `text_to_mp3.py` — стабильная точка входа/compatibility facade. Бизнес-логику туда не добавлять.
+- `ZeTer Voice.py` — точка входа и фасад совместимости. Бизнес-логику туда не добавлять.
 - `runtime.py`, `sapi.py`, `windows_tools.py`, `problem_logger.py` и несколько `app_*/task_*` файлов — **facade/composition roots**. Для изменения поведения идти в implementation owner из `docs/CODEMAP.md`.
 - Не объединять mixin-модули обратно. Разбиение специально уменьшает AI-context.
 - Не превращать маленькие owner-модули в generic «utils.py»/«helpers.py»: ownership должен оставаться очевидным.

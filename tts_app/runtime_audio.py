@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .runtime_core import *
+from .voice_process import stop_process as _stop_process
 
 def get_wav_info(path: Path) -> dict:
     try:
@@ -10,17 +11,12 @@ def get_wav_info(path: Path) -> dict:
             frames = int(wav.getnframes())
             channels = int(wav.getnchannels())
             sample_width_bytes = int(wav.getsampwidth())
-            expected_pcm_bytes = (
-                frames
-                * channels
-                * sample_width_bytes
-            )
-            # Standard PCM WAV has at least ~44 bytes of headers. Some SAPI WAVs
-            # use a larger header, so check only that the declared PCM payload can
-            # physically fit in the file.
-            appears_complete = bool(
-                expected_pcm_bytes <= max(0, file_size - 36)
-            )
+            frame_bytes = channels * sample_width_bytes
+            appears_complete = False
+            if frames > 0:
+                # Seek within the declared data chunk, past any metadata chunks.
+                wav.setpos(frames - 1)
+                appears_complete = len(wav.readframes(1)) == frame_bytes
             return {
                 "channels": channels,
                 "sample_rate_hz": frame_rate,
@@ -32,7 +28,7 @@ def get_wav_info(path: Path) -> dict:
                     else 0
                 ),
                 "file_size_bytes": file_size,
-                "expected_pcm_data_bytes": expected_pcm_bytes,
+                "expected_pcm_data_bytes": frames * frame_bytes,
                 "appears_complete": appears_complete,
             }
     except Exception:
@@ -256,43 +252,93 @@ def probe_audio_file(ffmpeg: str, path: Path) -> dict:
         }
 
 
+def _decode_audio_samples(ffmpeg: str, path: Path, cancel_event: threading.Event) -> tuple[int, int]:
+    """Count gapless samples from the first audio stream using bounded memory."""
+    if cancel_event.is_set():
+        raise InterruptedError("Операция остановлена пользователем.")
+
+    with subprocess.Popen(
+        [ffmpeg, "-nostdin", "-v", "error", "-xerror", "-err_detect", "explode",
+         "-i", str(path), "-map", "0:a:0", "-ac", "1", "-c:a", "pcm_s16le", "-f", "s16le", "pipe:1"],
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    ) as process:
+        pcm_bytes = 0
+        read_failed = False
+
+        def count_pcm_bytes() -> None:
+            nonlocal pcm_bytes, read_failed
+            try:
+                while block := process.stdout.read(128 * 1024):
+                    pcm_bytes += len(block)
+            except OSError:
+                read_failed = True
+                # Close our pipe so a failed reader cannot block the decoder.
+                process.stdout.close()
+
+        reader = threading.Thread(target=count_pcm_bytes, name="mp3-verification-reader")
+        reader.start()
+        try:
+            while process.poll() is None and not cancel_event.wait(0.05):
+                pass
+        finally:
+            _stop_process(process)
+            reader.join()
+
+        if cancel_event.is_set():
+            raise InterruptedError("Операция остановлена пользователем.")
+        return (0 if read_failed or pcm_bytes % 2 else pcm_bytes // 2), process.returncode
+
+
 def validate_final_mp3(
     ffmpeg: str,
     path: Path,
     expected_duration_sec: float,
+    cancel_event: threading.Event | None = None,
 ) -> dict:
+    if cancel_event is None:
+        cancel_event = threading.Event()
+    if cancel_event.is_set():
+        raise InterruptedError("Операция остановлена пользователем.")
     result = probe_audio_file(ffmpeg, path)
-    result["expected_duration_sec"] = round(
-        float(expected_duration_sec or 0),
-        3,
-    )
-
-    codec = str(result.get("codec") or "").casefold()
-    if result.get("validated") and codec and codec != "mp3":
-        result["fatal_error"] = (
-            "Проверка готового файла обнаружила неожиданный кодек: "
-            f"{codec}."
-        )
+    if cancel_event.is_set():
+        raise InterruptedError("Операция остановлена пользователем.")
+    sample_rate = int(result.get("sample_rate_hz") or 0)
+    codec = result.get("codec") or ""
+    result["expected_duration_sec"] = round(expected_duration_sec, 3)
+    result["validated"] = False
+    # The FFmpeg fallback rounds metadata duration to centiseconds. Sample
+    # count from the decoder also works for recordings below that precision.
+    if not codec or sample_rate <= 0:
+        result["fatal_error"] = "Не удалось подтвердить, что MP3 содержит звуковую дорожку."
+        return result
+    if codec.casefold() != "mp3":
+        result["fatal_error"] = "Проверка готового файла обнаружила неожиданный кодек: " + codec
         return result
 
-    actual = float(result.get("duration_sec") or 0)
-    expected = float(expected_duration_sec or 0)
-    if actual > 0 and expected > 0:
-        delta = abs(actual - expected)
-        tolerance = max(3.0, expected * 0.0001)
-        result["duration_delta_sec"] = round(delta, 3)
-        result["duration_tolerance_sec"] = round(tolerance, 3)
-        result["duration_matches"] = bool(delta <= tolerance)
-        if delta > tolerance:
-            result["fatal_error"] = (
-                "Итоговый MP3, похоже, обрезан или имеет неверную длительность: "
-                f"ожидалось около {expected:.1f} сек, получено {actual:.1f} сек."
-            )
-    else:
-        result["duration_delta_sec"] = None
-        result["duration_tolerance_sec"] = None
-        result["duration_matches"] = None
+    decoded, returncode = _decode_audio_samples(ffmpeg, path, cancel_event)
+    result.update(decoded_samples=decoded, decode_returncode=returncode)
+    if returncode or not decoded:
+        result["fatal_error"] = "FFmpeg не смог полностью декодировать итоговый MP3."
+        return result
 
+    # Our LAME files include Xing gapless information. FFmpeg discards the
+    # encoder delay and padding on decode. Allow two samples for resampling
+    # rounding, plus LAME's minimum decoded output of 47 for very short input.
+    expected_samples = round(expected_duration_sec * sample_rate)
+    minimum = expected_samples - 2
+    maximum = max(47, expected_samples + 2)
+    matches = minimum <= decoded <= maximum
+    result.update(
+        expected_samples=expected_samples,
+        decoded_duration_sec=round(decoded / sample_rate, 3),
+        duration_delta_sec=round(abs(decoded - expected_samples) / sample_rate, 6),
+        duration_tolerance_sec=round(max(2, maximum - expected_samples) / sample_rate, 6),
+        duration_matches=matches,
+        validated=matches,
+    )
+    if not matches:
+        result["fatal_error"] = "Длительность MP3 не совпадает с длительностью звуковых фрагментов."
     return result
 
 

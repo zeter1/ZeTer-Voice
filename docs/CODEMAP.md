@@ -4,7 +4,7 @@
 
 | Что меняется | Implementation owner | При необходимости рядом |
 |---|---|---|
-| запуск программы / composition приложения | `text_to_mp3.py`, `tts_app/app.py` | — |
+| запуск программы / composition приложения | `ZeTer Voice.py`, `tts_app/app.py` | — |
 | constants, common formatting/process helpers | `tts_app/runtime_core.py` | `tts_app/runtime.py` только для compatibility export |
 | UI freeze watchdog, snapshot стека, uncaught callbacks/threads, single-instance Windows mutex | `tts_app/ui_stall_diagnostics.py` | `app_workspace_init.py`, `app_shutdown.py`, `app.py` |
 | ускорение огромных строк, text metrics cache и word wrap | `tts_app/task_text_performance.py` | `task_ui_build.py`, `task_ui_status.py`, `task_capture.py` |
@@ -32,8 +32,8 @@
 | FFmpeg executable/concat/final MP3 | `tts_app/ffmpeg_tools.py` | `runtime_audio.py` |
 | Windows autostart / открыть папку | `tts_app/windows_autostart.py` | `runtime_storage.py` |
 | hotkey config/parse/enable/duplicate state | `tts_app/windows_hotkey_config.py` | `windows_hotkeys.py` composition |
-| clipboard capture/context/Ctrl+C injection | `tts_app/windows_hotkey_capture.py` | hotkey config |
-| local binding / low-level Windows hook loop | `tts_app/windows_hotkey_hook.py` | hotkey config |
+| общий захват Unicode из Windows Clipboard, ожидающая операция и доставка в Tk | `tts_app/windows_hotkey_capture.py` | hotkey config |
+| Windows low-level keyboard hook и SendInput | `tts_app/windows_hotkey_hook.py` | hotkey capture |
 | закрываемые вкладки notebook | `tts_app/widgets.py` | — |
 | создание UI одной task-вкладки | `tts_app/task_ui_build.py` | `task_ui_state.py` |
 | counters/queue/text-state/delete logging | `tts_app/task_ui_status.py` | — |

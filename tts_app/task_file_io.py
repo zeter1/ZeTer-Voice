@@ -53,6 +53,7 @@ class TaskFileIoMixin:
             self.text_box.insert("1.0", text)
         self.text_box.edit_modified(False)
         self.workspace_dirty = True
+        self.schedule_queue_status_refresh()
 
         self.app.settings["last_input_dir"] = str(src.parent)
         # A filename is a meaningful user-facing title and must not be overwritten

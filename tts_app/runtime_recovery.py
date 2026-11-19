@@ -3,6 +3,7 @@ from __future__ import annotations
 from .runtime_core import *
 from .runtime_audio import *
 from .runtime_storage import RECOVERY_DIR
+from .voice_catalog import voice_spec as _voice_spec
 
 def cleanup_legacy_temp_workdirs() -> int:
     """Delete old pre-2.9 temp folders that can no longer be resumed safely."""
@@ -80,14 +81,6 @@ def scan_recovery_jobs() -> tuple[list[dict], int]:
                 continue
 
             if job_dir.stat().st_mtime < cutoff:
-                output_path = Path(output_text)
-                partial_output = output_path.with_name(
-                    output_path.stem + ".part.mp3"
-                )
-                try:
-                    partial_output.unlink(missing_ok=True)
-                except OSError:
-                    pass
                 shutil.rmtree(job_dir, ignore_errors=True)
                 removed += 1
                 continue
@@ -107,9 +100,19 @@ def scan_recovery_jobs() -> tuple[list[dict], int]:
     return jobs, removed
 
 
+def recovery_checkpoint_limit(manifest: dict, chunks_total: int) -> int:
+    """A WAV from a failed synthesis may have a complete header."""
+    spec = _voice_spec(str(manifest.get("voice") or ""))
+    if spec and spec[0] == "edge" and manifest.get("edge_turn_end_verified") is not True:
+        return 0
+    return clamp_int(manifest.get("completed_chunks"), 0, chunks_total, 0)
+
+
 def count_valid_recovery_wavs(
     work_dir: Path,
     chunks_total: int,
+    *,
+    cleanup_stale: bool = True,
 ) -> tuple[int, int, float, dict]:
     """
     Count only a consecutive valid prefix: chunk_00001.wav ... chunk_N.wav.
@@ -126,10 +129,7 @@ def count_valid_recovery_wavs(
             if not path.exists() or path.stat().st_size < 128:
                 break
             info = get_wav_info(path)
-            if not info or not info.get(
-                "appears_complete",
-                False,
-            ):
+            if not info.get("appears_complete") or not info.get("frames"):
                 break
             valid_count = index
             total_bytes += int(path.stat().st_size)
@@ -142,14 +142,13 @@ def count_valid_recovery_wavs(
         except Exception:
             break
 
-    for path in work_dir.glob("chunk_*.wav"):
-        match = re.fullmatch(r"chunk_(\d{5})\.wav", path.name)
-        if not match:
-            continue
-        if int(match.group(1)) > valid_count:
-            try:
-                path.unlink()
-            except OSError:
-                pass
+    if cleanup_stale:
+        for path in work_dir.glob("chunk_*.wav"):
+            match = re.fullmatch(r"chunk_(\d{5,})\.wav", path.name)
+            if match and int(match.group(1)) > valid_count:
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
 
     return valid_count, total_bytes, total_audio_sec, first_sample

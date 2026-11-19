@@ -9,6 +9,8 @@ from .windows_tools import *
 from .ui_stall_diagnostics import ui_operation
 
 class TaskUiStatusMixin:
+    _pending_text_state_reason: str | None = None
+
     def _on_text_modified(self, _event=None) -> None:
         try:
             modified = bool(self.text_box.edit_modified())
@@ -43,9 +45,11 @@ class TaskUiStatusMixin:
     def _format_char_count(value: int) -> str:
         return f"{max(0, int(value)):,}".replace(",", " ")
 
-    def schedule_queue_status_refresh(self) -> None:
+    def schedule_queue_status_refresh(self, *, text_state_reason: str | None = None) -> None:
         # Throttle instead of debounce: the first request schedules an update
         # and rapid sentence events cannot postpone it forever.
+        if text_state_reason is not None:
+            self._pending_text_state_reason = text_state_reason
         if self.queue_status_after_id:
             return
 
@@ -59,7 +63,13 @@ class TaskUiStatusMixin:
 
     def refresh_queue_status(self) -> None:
         self.queue_status_after_id = None
+        reason = self._pending_text_state_reason
+        self._pending_text_state_reason = None
         try:
+            # Publish one current-state sample per refresh. Its hashed metrics
+            # are also reused for the queue label below.
+            if reason is not None:
+                self.log_text_state(reason, force=True)
             with ui_operation(self.app, "queue_text_metrics"):
                 metrics = self._text_metrics()
             chars = metrics["chars"]

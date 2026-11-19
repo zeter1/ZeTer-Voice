@@ -7,7 +7,6 @@ from .sapi import *
 from .ffmpeg_tools import *
 from .windows_tools import *
 from .ui_stall_diagnostics import ui_operation
-from .task_text_performance import has_long_line
 
 class TaskCaptureMixin:
     def _schedule_capture_persistence(self) -> None:
@@ -19,6 +18,12 @@ class TaskCaptureMixin:
         """Capture selected text from the last active external Windows app."""
         self.app.capture_selected_text_for_tab(self)
 
+    def _append_separator(self, text: str, end_index: str) -> str:
+        if text.startswith(("\n", "\r")):
+            return ""
+        tail = self.text_box.get(f"{end_index}-1c", end_index)
+        return "\n" if tail and tail not in ("\n", "\r") else ""
+
     def append_external_selected_text(self, captured_text: str) -> bool:
         """
         Append externally selected text to this tab and make it part of reading.
@@ -26,29 +31,16 @@ class TaskCaptureMixin:
         if not isinstance(captured_text, str):
             return False
 
-        captured_text = captured_text.strip()
-        if not captured_text:
+        if not captured_text or captured_text.isspace():
             messagebox.showwarning(
                 APP_TITLE,
                 "В выделении нет текста для чтения.",
             )
             return False
 
-        # Python character offsets (unlike Tk count) preserve emoji alignment.
-        with ui_operation(self.app, "capture_old_text_snapshot"):
-            old_text = self._full_text()
-        old_chars = len(old_text)
-
-        separator = ""
-        if (
-            old_text
-            and not old_text.endswith(("\n", "\r"))
-            and not captured_text.startswith(("\n", "\r"))
-        ):
-            separator = "\n"
-
+        old_end_index = self.text_box.index("end-1c")
+        separator = self._append_separator(captured_text, old_end_index)
         added_text = separator + captured_text
-        old_end_index = self._index_from_text_offset(old_chars)
         # Keep treating the MP3 task as active until its final GUI event is
         # handled. The worker may finish a fraction of a second before Tk
         # processes "done"/"cancelled"/"job_error"; text captured in that
@@ -69,34 +61,41 @@ class TaskCaptureMixin:
             except tk.TclError:
                 appended_at_mp3_source_end = False
 
-        if self._word_wrap_var.get() and has_long_line(added_text):
-            self.configure_text_view_for_content(added_text, origin="external_capture")
-        with ui_operation(self.app, "append_captured_text", added_chars=len(added_text)):
-            self.text_box.insert("end-1c", added_text)
-        if appended_at_mp3_source_end and separator == "\n":
-            self.mp3_source_separator_pending = True
-
-        captured_start_offset = old_chars + len(separator)
-        captured_start_index = self._index_from_text_offset(captured_start_offset)
-
-        self._text_metrics_cache = None
-        new_chars = old_chars + len(added_text)
-
         live_preview = bool(
             self.preview_thread and self.preview_thread.is_alive()
         )
         saved_pause = bool(
-            self.preview_is_paused and self._bookmark_is_valid()
+            not during_mp3_conversion
+            and self.preview_is_paused
+            and self._bookmark_is_valid()
         )
         auto_read_requested = bool(
             self.auto_read_hotkey_var.get()
         )
+        auto_read = auto_read_requested and any(ch.isalnum() for ch in captured_text)
+        old_chars = new_chars = None
+        if not during_mp3_conversion and auto_read and (live_preview or saved_pause):
+            # Preview ranges use Python character offsets. Tk 8.6's count
+            # reports supplementary characters as two units.
+            with ui_operation(self.app, "capture_old_text_snapshot"):
+                old_chars = len(self._full_text())
+            new_chars = old_chars + len(added_text)
+
+        self._prepare_text_insertion(added_text, old_end_index, origin="external_capture")
+        with ui_operation(self.app, "append_captured_text", added_chars=len(added_text)):
+            self.text_box.insert("end-1c", added_text)
+        self._text_metrics_cache = None
+        if appended_at_mp3_source_end and separator == "\n":
+            self.mp3_source_separator_pending = True
 
         if during_mp3_conversion:
             self.status_var.set(
                 "Текст добавлен вниз. Он сохранён для следующего MP3 "
                 "и не входит в текущую конвертацию."
             )
+
+        elif auto_read_requested and not auto_read:
+            self.status_var.set("Текст добавлен вниз.")
 
         elif live_preview and auto_read_requested:
             if not self.current_preview_follow_end:
@@ -153,11 +152,11 @@ class TaskCaptureMixin:
             )
 
         elif auto_read_requested:
+            captured_start_index = self.text_box.index(
+                f"{old_end_index}+{len(separator)}c"
+            )
             self._start_preview_worker(
-                raw_text=self.text_box.get(
-                    captured_start_index,
-                    "end-1c",
-                ),
+                raw_text=captured_text,
                 preview_base_index=captured_start_index,
                 source_mode="external_capture",
                 selected_text=False,
@@ -170,11 +169,7 @@ class TaskCaptureMixin:
         self.session_captured_chars += len(captured_text)
         self.workspace_dirty = True
         self._schedule_capture_persistence()
-        self.schedule_queue_status_refresh()
-        self.log_text_state(
-            "external_selection_appended",
-            force=True,
-        )
+        self.schedule_queue_status_refresh(text_state_reason="external_selection_appended")
 
         self.app.logger.event(
             "external_selection_appended",
@@ -193,6 +188,39 @@ class TaskCaptureMixin:
             delete_read_text=bool(self.delete_read_text_var.get()),
         )
         return True
+
+    def paste_text_from_editor(self, _event=None) -> str:
+        """Handle the editor's <<Paste>> with its normal selection and undo rules."""
+        if self.text_box.cget("state") == "normal":
+            try:
+                text = self.app.root.clipboard_get()
+            except tk.TclError:
+                return "break"  # Same behavior as the default Tk binding.
+            if text:
+                self._paste_at_cursor(text, origin="editor_paste")
+        return "break"
+
+    def _paste_at_cursor(self, text: str, *, origin: str) -> bool:
+        box = self.text_box
+        selection = box.tag_ranges("sel")
+        if selection:
+            start, end = str(selection[0]), str(selection[-1])
+        else:
+            start = end = box.index("insert")
+
+        self._prepare_text_insertion(text, start, origin=origin, replace_end=end)
+        box.mark_set("insert", start)
+        with ui_operation(self.app, "paste_clipboard_text", added_chars=len(text), source=origin):
+            # Tk's replace keeps deletion and insertion together in undo. A
+            # separator on each side also keeps it apart from ordinary typing.
+            separate = box.tk.getboolean(box.cget("autoseparators"))
+            if separate:
+                box.edit_separator()
+            box.replace(start, end, text)
+            if separate:
+                box.edit_separator()
+        self._text_metrics_cache = None
+        return bool(selection)
 
     def paste_text_from_clipboard(self) -> None:
         """
@@ -242,27 +270,20 @@ class TaskCaptureMixin:
 
         try:
             if append_to_end:
-                with ui_operation(self.app, "paste_old_text_snapshot"):
-                    old_text = self._full_text()
-                old_chars = len(old_text)
-
                 # "Докинуть вниз": keep the appended block visually separate.
-                separator = ""
-                if (
-                    old_text
-                    and not old_text.endswith(("\n", "\r"))
-                    and not clipboard_text.startswith(("\n", "\r"))
-                ):
-                    separator = "\n"
-
+                old_end_index = self.text_box.index("end-1c")
+                separator = self._append_separator(clipboard_text, old_end_index)
                 added_text = separator + clipboard_text
-                if self._word_wrap_var.get() and has_long_line(added_text):
-                    self.configure_text_view_for_content(added_text, origin="clipboard_append")
+                old_chars = new_chars = None
+                if self.current_preview_follow_end or isinstance(self.preview_bookmark, dict):
+                    with ui_operation(self.app, "paste_old_text_snapshot"):
+                        old_chars = len(self._full_text())
+                    new_chars = old_chars + len(added_text)
+                self._prepare_text_insertion(added_text, old_end_index, origin="clipboard_append")
                 with ui_operation(self.app, "append_clipboard_text", added_chars=len(added_text)):
                     self.text_box.insert("end-1c", added_text)
 
                 self._text_metrics_cache = None
-                new_chars = old_chars + len(added_text)
 
                 # A running whole-text/cursor/bookmark preview must ultimately
                 # reach the new bottom as well. The current SAPI sentence is
@@ -300,11 +321,7 @@ class TaskCaptureMixin:
 
                 self.workspace_dirty = True
                 self._schedule_capture_persistence()
-                self.schedule_queue_status_refresh()
-                self.log_text_state(
-                    "clipboard_append",
-                    force=True,
-                )
+                self.schedule_queue_status_refresh(text_state_reason="clipboard_append")
 
                 if saved_pause:
                     self.status_var.set(
@@ -339,35 +356,12 @@ class TaskCaptureMixin:
                 schedule_save=False,
             )
 
-            insert_index = self.text_box.index("insert")
-            had_selection = False
-
-            try:
-                selection_start = self.text_box.index("sel.first")
-                selection_end = self.text_box.index("sel.last")
-                had_selection = True
-                self.text_box.delete(selection_start, selection_end)
-                insert_index = selection_start
-            except tk.TclError:
-                pass
-
-            if self._word_wrap_var.get() and has_long_line(clipboard_text):
-                self.configure_text_view_for_content(clipboard_text, origin="clipboard_paste")
-            with ui_operation(self.app, "paste_clipboard_text", added_chars=len(clipboard_text)):
-                self.text_box.insert(insert_index, clipboard_text)
-            end_index = self.text_box.index(
-                f"{insert_index}+{len(clipboard_text)}c"
-            )
-            self.text_box.mark_set("insert", end_index)
-            self.text_box.see(end_index)
+            had_selection = self._paste_at_cursor(clipboard_text, origin="clipboard_paste")
+            self._see_paste_caret()
 
             self.workspace_dirty = True
             self.app.schedule_workspace_save()
-            self.schedule_queue_status_refresh()
-            self.log_text_state(
-                "clipboard_paste",
-                force=True,
-            )
+            self.schedule_queue_status_refresh(text_state_reason="clipboard_paste")
 
             self.status_var.set(
                 "Вставлено из буфера обмена: "

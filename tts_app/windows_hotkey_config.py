@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from .runtime import *
+import os
+import time
+
+from .runtime import tk
+from .windows_hotkey_capture import WindowsCopyCapture
 
 class WindowsHotkeyConfigMixin:
     def __init__(self, root, callback, hotkey="Ctrl+C"):
@@ -8,46 +12,20 @@ class WindowsHotkeyConfigMixin:
         self.callback = callback
         self.enabled = False
         self.is_windows = (os.name == "nt")
-        self._stop_event = threading.Event()
-        self._events = queue.Queue()
-        self._thread = None
-        self._thread_id = None
-        self._hook_id = None
-        self._hook_callback = None
-        self._hook_ready_event = threading.Event()
-        self._hook_install_error: int | None = None
+        self._service = None
+        self._binding_generation = 0
         self._local_binding_sequence = None
-        self._last_trigger_time = 0
+        self._local_binding_id = None
         self._last_text = None
         self._last_text_time = 0
         self._pressed_vks = set()
-        self._last_trigger_context: dict = {}
-        self._last_capture_info: dict = {}
-        try:
-            self._root_hwnd = int(self.root.winfo_id())
-        except Exception:
-            self._root_hwnd = None
-
-        self.hotkey_text = "Ctrl+C"
-        self.hotkey_modifiers = {"CTRL"}
-        self.hotkey_main_keys = ("C",)
-        self.hotkey_main = "C"          # оставлено для совместимости со старой логикой
-        self.hotkey_vks = {self.VK_BY_NAME["C"]}
-        self.hotkey_vk = self.VK_BY_NAME["C"]
         self.set_hotkey(hotkey)
-
-        # Очередь нужна, чтобы обработчик клавиатуры не трогал Tkinter напрямую.
-        self.root.after(100, self._poll_events)
-
-        if self.is_windows:
-            self._thread = threading.Thread(target=self._windows_keyboard_hook_loop, daemon=True)
-            self._thread.start()
 
     @classmethod
     def parse_hotkey(cls, hotkey):
         raw = (hotkey or "").strip()
         if not raw:
-            raise ValueError("Введите горячую клавишу, например F8, Q+W или Ctrl+Shift+C.")
+            raise ValueError("Введите горячую клавишу, например F8 или Ctrl+Shift+C.")
 
         prepared = (
             raw.replace("Control", "Ctrl")
@@ -84,7 +62,7 @@ class WindowsHotkeyConfigMixin:
             if token not in cls.VK_BY_NAME:
                 raise ValueError(
                     "Эта клавиша пока не поддерживается. Используйте буквы, цифры, F1-F24 "
-                    "или сочетания вроде Q+W, Й+Ц, Ctrl+Alt+X."
+                    "или сочетания вроде Ctrl+Alt+X."
                 )
             if token not in main_keys:
                 main_keys.append(token)
@@ -123,6 +101,11 @@ class WindowsHotkeyConfigMixin:
 
     def set_hotkey(self, hotkey):
         parsed = self.parse_hotkey(hotkey)
+        was_enabled = self.enabled
+        if was_enabled and self.unsafe_hotkey_reason(hotkey):
+            raise ValueError(self.unsafe_hotkey_reason(hotkey))
+        if was_enabled:
+            self.disable()
         self.hotkey_text = parsed["text"]
         self.hotkey_modifiers = parsed["modifiers"]
         self.hotkey_main_keys = parsed["main_keys"]
@@ -131,60 +114,90 @@ class WindowsHotkeyConfigMixin:
         self.hotkey_vk = next(iter(self.hotkey_vks))
         self._pressed_vks.clear()
 
-        if not self.is_windows and self.enabled:
-            self._enable_local_binding()
+        if was_enabled:
+            self.enable()
 
         return self.hotkey_text
 
     def get_hotkey(self):
         return self.hotkey_text
 
-    def enable(self):
-        if self.is_windows:
-            # Constructor starts the dedicated WH_KEYBOARD_LL thread.  Do not
-            # report the hotkey as active until Windows has actually accepted
-            # the hook; previously the UI could say "... → только эта вкладка"
-            # even when SetWindowsHookExW had failed in the background thread.
-            if not self._hook_ready_event.wait(timeout=1.5):
-                self.enabled = False
-                raise RuntimeError(
-                    "Windows не подтвердил запуск глобальной горячей клавиши. "
-                    "Попробуйте назначить её ещё раз или перезапустить программу."
-                )
-            if not self._hook_id:
-                self.enabled = False
-                error_code = self._hook_install_error
-                suffix = (
-                    f" (WinError {error_code})"
-                    if error_code
-                    else ""
-                )
-                raise RuntimeError(
-                    "Не удалось зарегистрировать глобальный перехватчик клавиатуры"
-                    + suffix
-                    + "."
-                )
+    @classmethod
+    def unsafe_hotkey_reason(cls, hotkey):
+        parsed = cls.parse_hotkey(hotkey)
+        keys = parsed["main_keys"]
+        if len(keys) != 1 or (
+            (len(keys[0]) == 1 or keys[0] in ("SPACE", "ПРОБЕЛ"))
+            and not parsed["modifiers"].intersection(("CTRL", "ALT"))
+        ):
+            return "Это сочетание может изменить выделение. Выберите F8 или Ctrl+Shift+C."
+        return None
 
+    def _hotkey_is_plain_ctrl_c(self):
+        return self.hotkey_main_keys == ("C",) and self.hotkey_modifiers == {"CTRL"}
+
+    def enable(self):
+        if self.enabled:
+            return
+        reason = self.unsafe_hotkey_reason(self.hotkey_text)
+        if reason:
+            raise ValueError(reason)
+        self._binding_generation += 1
+        if self.is_windows:
+            service = getattr(self.root, "_global_copy_service", None)
+            if service is None:
+                service = WindowsCopyCapture(self.root)
+                try:
+                    service.start()
+                except Exception:
+                    service.stop()
+                    raise
+                self.root._global_copy_service = service
+            service.register(self)
+            self._service = service
         self.enabled = True
         if not self.is_windows:
             self._enable_local_binding()
 
     def disable(self):
         self.enabled = False
-        if not self.is_windows:
+        if self._service is not None:
+            self._service.unregister(self)
+            self._service = None
+        if self._local_binding_sequence is not None:
             self._disable_local_binding()
 
     def stop(self):
         self.disable()
-        self._stop_event.set()
-        if self.is_windows and self._thread_id:
-            try:
-                import ctypes
-                user32 = ctypes.windll.user32
-                WM_QUIT = 0x0012
-                user32.PostThreadMessageW(self._thread_id, WM_QUIT, 0, 0)
-            except Exception:
-                pass
+
+    @staticmethod
+    def stop_shared(root):
+        service = getattr(root, "_global_copy_service", None)
+        if service is not None:
+            service.stop()
+            root._global_copy_service = None
+
+    def _enable_local_binding(self):
+        modifiers = [
+            name.title().replace("Ctrl", "Control")
+            for name in self.MODIFIER_ORDER if name in self.hotkey_modifiers
+        ]
+        key = self.hotkey_main
+        sequence = "<" + "-".join([*modifiers, key.lower() if len(key) == 1 else key]) + ">"
+        self._local_binding_id = self.root.bind_all(sequence, self._local_hotkey, add="+")
+        self._local_binding_sequence = sequence
+
+    def _disable_local_binding(self):
+        try:
+            self.root.unbind_all(self._local_binding_sequence)
+            self.root.deletecommand(self._local_binding_id)
+        except tk.TclError:
+            pass
+        self._local_binding_sequence = self._local_binding_id = None
+
+    def _local_hotkey(self, event=None):
+        # Preserve ordinary in-app copy and paste in the non-Windows fallback.
+        return None
 
     def remember_text_and_check_duplicate(self, text):
         """Защита от случайного двойного срабатывания на один и тот же текст."""

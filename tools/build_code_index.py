@@ -6,7 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DOCS = ROOT / "docs"
-SOURCE_FILES = [ROOT / "text_to_mp3.py", *sorted((ROOT / "tts_app").glob("*.py"))]
+SOURCE_FILES = [ROOT / "ZeTer Voice.py", *sorted((ROOT / "tts_app").glob("*.py"))]
 
 
 def rel(path: Path) -> str:

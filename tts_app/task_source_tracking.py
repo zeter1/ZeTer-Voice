@@ -18,9 +18,9 @@ class TaskSourceTrackingMixin:
 
         try:
             start_index = self.text_box.index("1.0")
-            end_index = self.text_box.index(
-                f"{start_index}+{len(raw_text)}c"
-            )
+            # The snapshot is the full buffer. Ask Tk for its actual end
+            # instead of deriving a widget index from Python's Unicode count.
+            end_index = self.text_box.index("end-1c")
             if self.text_box.get(start_index, end_index) != raw_text:
                 return False
 

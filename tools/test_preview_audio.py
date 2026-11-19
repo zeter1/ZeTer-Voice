@@ -9,7 +9,7 @@ import unittest
 import queue
 import weakref
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 # __file__, not cwd, owns storage. Import only a source mirror: no user state.
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
@@ -315,6 +315,11 @@ class HotkeyCaptureTests(unittest.TestCase):
         stop_event, pause_event = threading.Event(), threading.Event()
         if paused:
             pause_event.set()
+
+        def append(text):
+            appended.append(text)
+            return True
+
         tab = types.SimpleNamespace(
             task_id="capture-task", workspace_id="capture-tab",
             tab_title=lambda: "Capture test",
@@ -323,10 +328,11 @@ class HotkeyCaptureTests(unittest.TestCase):
             preview_is_paused=paused, preview_stop_event=stop_event,
             preview_pause_event=pause_event, preview_bookmark={"start_offset": 12},
             auto_read_hotkey_var=types.SimpleNamespace(get=lambda: True),
-            append_external_selected_text=appended.append,
+            append_external_selected_text=append,
         )
         monitor = types.SimpleNamespace(
             enabled=True, get_hotkey=lambda: "Ctrl+C",
+            _clipboard_sequence_number=lambda: clipboard.get("sequence"),
             remember_text_and_check_duplicate=lambda text: False,
         )
         app = types.SimpleNamespace(
@@ -336,22 +342,24 @@ class HotkeyCaptureTests(unittest.TestCase):
             tab_hotkey_monitors={"capture-tab": monitor},
             logger=types.SimpleNamespace(event=lambda name, **fields: events.append((name, fields))),
         )
-        def capture(text):
+        def capture(text, sequence=None):
             clipboard["text"] = text
+            clipboard["sequence"] = sequence
             AppHotkeysMixin._on_tab_copy_hotkey(app, "capture-tab", {
                 "clipboard_changed": True, "source_process": "synthetic.exe",
-                "copy_latency_ms": 120,
+                "copy_latency_ms": 120, "clipboard_sequence_after": sequence,
+                "captured_text": text,
             })
         if return_app:
             return capture, tab, appended, events, app
         return capture, tab, appended, events
 
-    def test_punctuation_only_capture_does_not_start_idle_reading(self):
-        for text in (".", ". . .", ", , .", "english.text", "…"):
+    def test_punctuation_only_capture_reaches_idle_tab(self):
+        for text in (".", ". . .", ", , .", "…"):
             with self.subTest(text=text):
                 capture, tab, appended, events = self.make_capture()
                 capture(text)
-                self.assertEqual(appended, [], "punctuation entered the reading queue")
+                self.assertEqual(appended, [text])
                 self.assertFalse(tab.preview_stop_event.is_set())
 
     def test_punctuation_during_reading_keeps_next_valid_capture(self):
@@ -359,7 +367,7 @@ class HotkeyCaptureTests(unittest.TestCase):
         capture("Первый текст.")
         capture(". . .")
         capture("Следующий текст, 123.")
-        self.assertEqual(appended, ["Первый текст.", "Следующий текст, 123."])
+        self.assertEqual(appended, ["Первый текст.", ". . .", "Следующий текст, 123."])
         self.assertTrue(tab.preview_thread.is_alive())
         self.assertFalse(tab.preview_stop_event.is_set())
         self.assertFalse(tab.preview_pause_event.is_set())
@@ -368,130 +376,65 @@ class HotkeyCaptureTests(unittest.TestCase):
         capture, tab, appended, events = self.make_capture(running=True, paused=True)
         capture(".")
         capture("Продолжение.")
-        self.assertEqual(appended, ["Продолжение."])
+        self.assertEqual(appended, [".", "Продолжение."])
         self.assertEqual(tab.preview_bookmark, {"start_offset": 12})
         self.assertTrue(tab.preview_is_paused)
         self.assertTrue(tab.preview_pause_event.is_set())
         self.assertFalse(tab.preview_stop_event.is_set())
 
-    def test_words_numbers_and_the_existing_filter_are_preserved(self):
-        for text, expected in (("Я", "Я"), ("7", "7"), ("123,45.", "123,45."),
-                               ("Русский — English текст.", "Русский текст.")):
+    def test_words_numbers_and_line_boundaries_are_preserved(self):
+        for text in ("Я", "7", "123,45.", "Русский — English текст.\n\n日本語\n🧪",
+                     "  English only\r\nsecond line\r\n"):
             with self.subTest(text=text):
                 capture, tab, appended, events = self.make_capture()
                 capture(text)
-                self.assertEqual(appended, [expected])
+                self.assertEqual(appended, [text])
 
-    def test_filtered_empty_capture_still_does_not_enter_queue(self):
+    def test_blank_capture_still_does_not_enter_queue(self):
         capture, tab, appended, events = self.make_capture(running=True)
-        capture("English only")
+        capture("  \n\t ")
         self.assertEqual(appended, [])
         self.assertFalse(tab.preview_stop_event.is_set())
 
-    def test_busy_clipboard_is_retried_without_blocking_tk(self):
-        _, tab, appended, events, app = self.make_capture(return_app=True)
-        from tkinter import TclError
-        scheduled = []
-        reads = []
-        app.root.after = lambda ms, callback: scheduled.append((ms, callback))
-        app._on_tab_copy_hotkey = lambda workspace_id, info: AppHotkeysMixin._on_tab_copy_hotkey(
-            app, workspace_id, info
+    def test_only_the_already_processed_clipboard_sequence_is_skipped(self):
+        capture, tab, appended, events, app = self.make_capture(return_app=True)
+        app.tab_hotkey_monitors["capture-tab"].remember_text_and_check_duplicate = (
+            lambda text: text in appended
         )
-        app.tab_hotkey_monitors["capture-tab"]._clipboard_sequence_number = lambda: 44
+        text = "Отдельное повторное выделение."
+        capture(text, sequence=100)
+        capture(text, sequence=100)
+        capture(text, sequence=101)
+        self.assertEqual(appended, [text, text])
+        self.assertEqual(sum(name == "global_copy_duplicate_skipped" for name, _ in events), 1)
 
-        def clipboard_get():
-            reads.append(True)
-            if len(reads) <= 2:
-                raise TclError("clipboard cannot be opened, another application grabbed it")
-            return "Первый текст."
+    def test_rejected_append_can_retry_the_same_clipboard_sequence(self):
+        capture, tab, appended, events = self.make_capture()
+        accept = tab.append_external_selected_text
+        tab.append_external_selected_text = lambda text: False
+        capture("Retry the same text.", sequence=42)
+        self.assertFalse(any(name == "global_copy_text_captured" for name, _ in events))
+        tab.append_external_selected_text = accept
+        capture("Retry the same text.", sequence=42)
+        self.assertEqual(appended, ["Retry the same text."])
+        self.assertEqual(sum(name == "global_copy_text_captured" for name, _ in events), 1)
 
-        app.root.clipboard_get = clipboard_get
-        app._on_tab_copy_hotkey("capture-tab", {
-            "clipboard_changed": True, "clipboard_sequence_after": 44,
-        })
-        self.assertEqual(len(scheduled), 1)
-        while scheduled:
-            ms, callback = scheduled.pop(0)
-            self.assertEqual(ms, 60)
-            callback()
-        self.assertEqual(len(reads), 3)
-        self.assertEqual(appended, ["Первый текст."])
-        self.assertFalse(any(kind == "global_copy_clipboard_read_failed" for kind, _ in events))
+    def test_tk_consumes_snapshot_without_reading_newer_clipboard(self):
+        capture, _, appended, _, app = self.make_capture(return_app=True)
+        app.root.clipboard_get = lambda: self.fail("Tk must not reread the Windows clipboard")
+        capture("Первый текст.", sequence=44)
+        capture("Другой текст 🧪", sequence=45)
+        self.assertEqual(appended, ["Первый текст.", "Другой текст 🧪"])
 
-    def test_clipboard_retry_does_not_consume_newer_copy(self):
+    def test_no_snapshot_reports_actionable_failure(self):
         _, tab, appended, events, app = self.make_capture(return_app=True)
-        from tkinter import TclError
-        scheduled = []
-        sequence = [10]
-        app.root.clipboard_get = lambda: (_ for _ in ()).throw(
-            TclError("clipboard cannot be opened, another application grabbed it")
-        )
-        app.root.after = lambda ms, callback: scheduled.append(callback)
-        app._on_tab_copy_hotkey = lambda workspace_id, info: AppHotkeysMixin._on_tab_copy_hotkey(
-            app, workspace_id, info
-        )
-        app.tab_hotkey_monitors["capture-tab"]._clipboard_sequence_number = lambda: sequence[0]
-        app._on_tab_copy_hotkey("capture-tab", {
-            "clipboard_changed": True, "clipboard_sequence_after": 10,
-        })
-        self.assertEqual(len(scheduled), 1)
-        sequence[0] = 11
-        scheduled.pop(0)()
-        self.assertEqual(appended, [])
-        self.assertTrue(any(kind == "global_copy_clipboard_retry_superseded" for kind, _ in events))
-
-    def test_late_clipboard_update_is_captured_after_async_grace(self):
-        _, tab, appended, events, app = self.make_capture(return_app=True)
-        callbacks = []
-        sequence = [100]
-        app.root.after = lambda ms, callback: callbacks.append((ms, callback))
-        app.root.clipboard_get = lambda: "Новый русский текст."
-        monitor = app.tab_hotkey_monitors["capture-tab"]
-        monitor._clipboard_sequence_number = lambda: sequence[0]
-        monitor._capture_generation = 1
-        app._on_tab_copy_hotkey = lambda workspace_id, info: AppHotkeysMixin._on_tab_copy_hotkey(
-            app, workspace_id, info
-        )
-        app._on_tab_copy_hotkey("capture-tab", {
-            "clipboard_changed": False, "clipboard_sequence_before": 100,
-            "capture_generation": 1,
-        })
-        self.assertEqual(len(callbacks), 1)
-        self.assertEqual(callbacks[0][0], 125)
-        self.assertEqual(appended, [])
-        sequence[0] = 101
-        callbacks.pop(0)[1]()
-        self.assertEqual(appended, ["Новый русский текст."])
-        self.assertFalse(any(name == "global_copy_clipboard_timeout" for name, _ in events))
-
-    def test_clipboard_grace_never_reads_unchanged_stale_data(self):
-        _, tab, appended, events, app = self.make_capture(return_app=True)
-        callbacks = []
-        app.root.after = lambda ms, callback: callbacks.append(callback)
-        app.root.clipboard_get = lambda: self.fail("Must not read unchanged clipboard")
-        app.tab_hotkey_monitors["capture-tab"]._clipboard_sequence_number = lambda: 9
-        app._on_tab_copy_hotkey = lambda workspace_id, info: AppHotkeysMixin._on_tab_copy_hotkey(
-            app, workspace_id, info
-        )
-        app._on_tab_copy_hotkey("capture-tab", {
-            "clipboard_changed": False, "clipboard_sequence_before": 9,
-        })
-        for _ in range(2):
-            self.assertEqual(len(callbacks), 1)
-            callbacks.pop(0)()
-        self.assertEqual(appended, [])
-        self.assertEqual(sum(name == "global_copy_clipboard_timeout" for name, _ in events), 1)
-
-    def test_older_capture_cannot_steal_next_hotkey_text(self):
-        _, tab, appended, events, app = self.make_capture(return_app=True)
-        app.tab_hotkey_monitors["capture-tab"]._capture_generation = 2
-        app.root.clipboard_get = lambda: self.fail("Stale generation must not read clipboard")
+        tab.status_var.set = status = Mock()
         AppHotkeysMixin._on_tab_copy_hotkey(app, "capture-tab", {
-            "clipboard_changed": True, "capture_generation": 1,
+            "capture_rejected": "clipboard_timeout", "captured_text": None,
         })
         self.assertEqual(appended, [])
-        self.assertTrue(any(name == "global_copy_capture_superseded" for name, _ in events))
-
+        self.assertFalse(any(name == "global_copy_text_captured" for name, _ in events))
+        self.assertIn("Ctrl+C", status.call_args.args[0])
 
 if __name__ == "__main__":
     try:

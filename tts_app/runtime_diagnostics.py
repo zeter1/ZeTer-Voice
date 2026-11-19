@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from .runtime_core import *
 
+_SENTENCE_END = re.compile(r"(?<![.!?…])[.!?…]+(?=\s|$)")
+
+
 def analyze_text_for_logging(raw_text: str, normalized_text: str) -> dict:
     """Compact structural diagnostics without storing the user's full text."""
     unusual_controls = 0
@@ -18,7 +21,7 @@ def analyze_text_for_logging(raw_text: str, normalized_text: str) -> dict:
     blank_line_blocks = len(
         [part for part in re.split(r"\n{2,}", raw_text) if part.strip()]
     )
-    sentence_endings = len(re.findall(r"[.!?…]+(?=\s|$)", raw_text))
+    sentence_endings = sum(1 for _ in _SENTENCE_END.finditer(raw_text))
 
     return {
         "raw_chars": len(raw_text),

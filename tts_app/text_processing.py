@@ -7,19 +7,19 @@ def normalize_text(text: str) -> str:
     text = text.replace("\u2028", "\n").replace("\u2029", "\n")
     text = unicodedata.normalize("NFKC", text)
 
-    cleaned: list[str] = []
-    for ch in text:
-        if ch in "\n\t":
-            cleaned.append(ch)
-            continue
-
-        category = unicodedata.category(ch)
-        if category in {"Cc", "Cf", "Cs", "Co", "Cn"}:
-            cleaned.append(" ")
+    # Bound the number of temporary Python character objects for long books.
+    blocks: list[str] = []
+    block_size = 64 * 1024
+    for offset in range(0, len(text), block_size):
+        block = text[offset:offset + block_size]
+        if block.isascii():
+            blocks.append(re.sub(r"[\x00-\x08\x0b-\x1f\x7f]", " ", block))
         else:
-            cleaned.append(ch)
-
-    text = "".join(cleaned)
+            blocks.append("".join(
+                ch if ch in "\n\t" or not unicodedata.category(ch).startswith("C") else " "
+                for ch in block
+            ))
+    text = "".join(blocks)
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n[ \t]+", "\n", text)
     text = re.sub(r"\n{4,}", "\n\n\n", text)
@@ -28,41 +28,43 @@ def normalize_text(text: str) -> str:
 
 def _split_oversized_piece(piece: str, max_chars: int) -> list[str]:
     result: list[str] = []
-    remaining = piece.strip()
+    piece = piece.strip()
+    cursor = 0
+    end = len(piece)
+    cut_from = max(1, int(max_chars * 0.55))
 
-    while len(remaining) > max_chars:
-        cut_from = max(1, int(max_chars * 0.55))
-        window = remaining[: max_chars + 1]
-
-        candidates = [
-            window.rfind("\n", cut_from),
-            window.rfind(". ", cut_from),
-            window.rfind("! ", cut_from),
-            window.rfind("? ", cut_from),
-            window.rfind("; ", cut_from),
-            window.rfind(", ", cut_from),
-            window.rfind(" ", cut_from),
-        ]
-
-        cut = max(candidates)
-        if cut <= 0:
-            cut = max_chars
-        elif remaining[cut:cut + 2] in {". ", "! ", "? ", "; ", ", "}:
+    while end - cursor > max_chars:
+        # Keep the window and cut rules stable for existing recovery WAVs.
+        cut = max(
+            piece.rfind(separator, cursor + cut_from, cursor + max_chars + 1)
+            for separator in ("\n", ". ", "! ", "? ", "; ", ", ", " ")
+        )
+        if cut <= cursor:
+            cut = cursor + max_chars
+        elif piece[cut:cut + 2] in {". ", "! ", "? ", "; ", ", "}:
             cut += 1
 
-        part = remaining[:cut].strip()
+        part = piece[cursor:cut].strip()
         if part:
             result.append(part)
-        remaining = remaining[cut:].strip()
+        cursor = cut
+        while cursor < end and piece[cursor].isspace():
+            cursor += 1
 
-    if remaining:
-        result.append(remaining)
+    if cursor < end:
+        result.append(piece[cursor:])
 
     return result
 
 
 def split_text(text: str, max_chars: int = DEFAULT_CHUNK_SIZE) -> list[str]:
-    text = normalize_text(text)
+    return split_normalized_text(normalize_text(text), max_chars)
+
+
+def split_normalized_text(text: str, max_chars: int = DEFAULT_CHUNK_SIZE) -> list[str]:
+    """Split a normalized source snapshot without preparing the text again."""
+    if max_chars < 1:
+        raise ValueError("max_chars must be positive")
     if not text:
         return []
 
@@ -172,7 +174,9 @@ def build_sapi_text(
     rate_steps = _split_sapi_xml_adjustment(rate_overflow)
 
     if not pitch_steps and not rate_steps:
-        return text, SVSF_DEFAULT
+        # SAPI interprets a leading '<' as markup by default.
+        sapi_is_not_xml = 16  # SpeechVoiceSpeakFlags.SVSFIsNotXML
+        return text, sapi_is_not_xml
 
     wrapped = html.escape(text, quote=False)
 
@@ -222,10 +226,11 @@ def build_preview_segments(
     # - sentence punctuation followed by whitespace/end;
     # - line break;
     # - end of text.
-    pattern = re.compile(
-        r".+?(?:[.!?…]+(?=\s|$)|\n+|$)",
-        re.DOTALL,
-    )
+    if max_chars < 1:
+        raise ValueError("max_chars must be positive")
+    # Match only at the start of a punctuation run. A run followed by a
+    # word used to be scanned repeatedly from every character in the run.
+    boundary = re.compile(r"(?<![.!?…])[.!?…]+(?=\s|$)|\n+")
 
     def append_trimmed(start: int, end: int) -> None:
         raw = text[start:end]
@@ -284,23 +289,11 @@ def build_preview_segments(
                     }
                 )
 
-    for match in pattern.finditer(text):
-        append_trimmed(match.start(), match.end())
-
-    # Regex can theoretically miss an unusual trailing fragment; keep a safe
-    # fallback so preview never silently drops user text.
-    if not segments and text.strip():
-        first = len(text) - len(text.lstrip())
-        last = len(text.rstrip())
-        spoken = normalize_text(text[first:last])
-        if spoken:
-            segments.append(
-                {
-                    "start": first,
-                    "end": last,
-                    "text": spoken,
-                }
-            )
+    start = 0
+    for match in boundary.finditer(text):
+        append_trimmed(start, match.end())
+        start = match.end()
+    append_trimmed(start, len(text))
 
     return segments
 

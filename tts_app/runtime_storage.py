@@ -46,6 +46,15 @@ RECOVERY_DIR = STORAGE_BASE_DIR / RECOVERY_DIR_NAME
 MP3_TEXT_BACKUPS_DIR = STORAGE_BASE_DIR / MP3_TEXT_BACKUPS_DIR_NAME
 
 
+def read_workspace_manifest(path: Path) -> dict:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or not isinstance(payload.get("tabs"), list):
+        raise ValueError("Некорректный список вкладок.")
+    if not all(isinstance(tab, dict) for tab in payload["tabs"]):
+        raise ValueError("Некорректная запись вкладки.")
+    return payload
+
+
 DEFAULT_SETTINGS = {
     "schema": 1,
     "voice": DEFAULT_VOICE_HINT,
@@ -133,7 +142,9 @@ def atomic_write_text(path: Path, text: str) -> int:
                 handle.flush()
                 os.fsync(handle.fileno())
 
-            if tmp.read_text(encoding="utf-8") != text:
+            with tmp.open(encoding="utf-8", newline="") as handle:
+                verified = handle.read()
+            if verified != text:
                 raise OSError(
                     "Проверка временного файла после записи не пройдена"
                 )
@@ -265,8 +276,8 @@ def ensure_help_files() -> None:
         "вкладка всегда создаётся со значением «Нет». Выделите текст в браузере, "
         "Telegram, Word или другом месте и нажмите клавишу конкретной вкладки: "
         "текст будет добавлен именно в эту вкладку, даже если на экране открыта "
-        "другая вкладка. Перед добавлением остаются только русские буквы, цифры, "
-        "пробелы, точки и запятые. Одинаковую горячую клавишу нельзя назначить "
+        "другая вкладка. Сохраняются буквы разных языков, знаки и переносы строк. "
+        "Одинаковую горячую клавишу нельзя назначить "
         "двум вкладкам.\n"
         "Галочка «Сразу читать добавленный текст» сохраняется отдельно для каждой "
         "вкладки. Она определяет, запускать ли чтение автоматически после "

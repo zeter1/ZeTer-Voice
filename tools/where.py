@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-FILES = [ROOT / "text_to_mp3.py", *sorted((ROOT / "tts_app").glob("*.py"))]
+FILES = [ROOT / "ZeTer Voice.py", *sorted((ROOT / "tts_app").glob("*.py"))]
 
 
 def main() -> int:

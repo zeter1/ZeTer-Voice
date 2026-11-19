@@ -7,6 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from tts_app.runtime import clamp_int, format_bytes, bitrate_to_bps, atomic_write_text
+from tts_app.runtime_diagnostics import analyze_text_for_logging
 from tts_app.text_processing import normalize_text, split_text, build_sapi_text
 from tts_app.windows_hotkeys import GlobalCopyHotkeyMonitor
 
@@ -19,6 +20,8 @@ def main() -> None:
     parts = split_text("Первое предложение. Второе предложение.", 20)
     assert parts and "".join(parts).replace(" ", "")
     assert build_sapi_text("тест", 0, 0)
+    noisy_text = "!" * 20_000 + "слово. Второе?!\nТретье…"
+    assert analyze_text_for_logging(noisy_text, noisy_text)["sentence_endings_approx"] == 3
 
     # Hotkeys are physical-key based: Russian Й+Ц and English Q+W must
     # resolve to the same VK pair, and modifier matching must use the hook's

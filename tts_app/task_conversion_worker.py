@@ -25,6 +25,8 @@ class TaskConversionWorkerMixin:
         volume: int,
         bitrate: str,
         recovery_work_dir: Path | None = None,
+        *,
+        approved_output_identity: tuple[int, ...] | None = None,
     ) -> None:
         # CODEX-REGION: worker-bootstrap
         try:
@@ -57,7 +59,9 @@ class TaskConversionWorkerMixin:
 
         work_dir: Path | None = None
         recovery_manifest_path: Path | None = None
+        output_staging: tempfile.TemporaryDirectory | None = None
         chunks: list[str] = []
+        wav_files: list[Path] = []
         current_chunk: str | None = None
         retry_count = 0
         chunk_durations: list[float] = []
@@ -80,7 +84,8 @@ class TaskConversionWorkerMixin:
         output_free_after: int | None = None
         preserve_recovery_on_exit = False
         engine_session = None
-        max_attempts = 1 if voice_spec(voice) else MAX_RETRIES
+        engine_spec = voice_spec(voice)
+        max_attempts = 1 if engine_spec else MAX_RETRIES
 
         text_hash_full = hashlib.sha256(
             text.encode("utf-8")
@@ -124,12 +129,12 @@ class TaskConversionWorkerMixin:
 
         # CODEX-REGION: split-output-recovery
         try:
-            if voice_spec(voice):
+            if engine_spec:
                 engine_session = VoiceSession(voice, self.cancel_event)
                 engine_session.__enter__()
             stage = "split_text"
             self.current_job_stage = stage
-            chunks = split_text(text)
+            chunks = split_normalized_text(text)
             if not chunks:
                 raise RuntimeError(
                     "После подготовки текста не осталось данных для озвучки."
@@ -158,6 +163,29 @@ class TaskConversionWorkerMixin:
 
             recovery_manifest_path = work_dir / "recovery.json"
             recovery_source_path = work_dir / "source_text.txt"
+
+            if is_recovery_resume:
+                saved = json.loads(recovery_manifest_path.read_text(encoding="utf-8"))
+                if (
+                    not isinstance(saved, dict)
+                    or saved.get("run_id") != run_id
+                    or saved.get("text_sha256") != text_hash_full
+                    or saved.get("chunks_total") != len(chunks)
+                ):
+                    raise RuntimeError("Снимок текста не совпадает с данными восстановления MP3.")
+                checkpoint_limit = recovery_checkpoint_limit(saved, len(chunks))
+                _, rate_overflow = split_extended_sapi_rate(rate)
+                if (
+                    saved.get("sapi_literal_text") is not True
+                    and engine_session is None
+                    and not (pitch or rate_overflow)
+                ):
+                    # Old SAPI versions of this job may have interpreted a
+                    # leading '<' as markup. Resynthesize from the first such chunk.
+                    for index in range(checkpoint_limit):
+                        if chunks[index].startswith("<"):
+                            checkpoint_limit = index
+                            break
 
             # Recovery data is NOT a diagnostic log. Keeping the exact normalized
             # source snapshot here makes crash recovery safe even if the user
@@ -192,6 +220,8 @@ class TaskConversionWorkerMixin:
                     "chars": len(text),
                     "chunks_total": len(chunks),
                     "completed_chunks": completed_chunks,
+                    "sapi_literal_text": True,
+                    "edge_turn_end_verified": bool(engine_spec and engine_spec[0] == "edge"),
                     "output_path": str(output_path),
                     "voice": voice,
                     "rate": rate,
@@ -214,7 +244,7 @@ class TaskConversionWorkerMixin:
                     first_wav_sample,
                 ) = count_valid_recovery_wavs(
                     work_dir,
-                    len(chunks),
+                    checkpoint_limit,
                 )
                 wav_files = [
                     work_dir / f"chunk_{index:05d}.wav"
@@ -258,9 +288,6 @@ class TaskConversionWorkerMixin:
                         },
                     )
                 )
-            else:
-                wav_files: list[Path] = []
-
             write_recovery_state(
                 "sapi",
                 resumed_existing_chunks,
@@ -330,6 +357,7 @@ class TaskConversionWorkerMixin:
                 stage = f"sapi_chunk_{index}"
                 self.current_job_stage = "sapi"
                 wav_path = work_dir / f"chunk_{index:05d}.wav"
+                wav_candidate = work_dir / f".chunk_{index:05d}.part.wav"
                 chunk_started = time.perf_counter()
                 success = False
                 last_error = ""
@@ -342,14 +370,14 @@ class TaskConversionWorkerMixin:
                         )
 
                     try:
-                        wav_path.unlink(missing_ok=True)
+                        wav_candidate.unlink(missing_ok=True)
 
                         if engine_session is not None:
-                            engine_session.synthesize(chunk, wav_path, rate, pitch, volume)
+                            engine_session.synthesize(chunk, wav_candidate, rate, pitch, volume)
                         else:
                             synthesize_wav_once(
                                 text=chunk,
-                                wav_path=wav_path,
+                                wav_path=wav_candidate,
                                 voice_description=voice,
                                 rate=rate,
                                 pitch=pitch,
@@ -357,27 +385,25 @@ class TaskConversionWorkerMixin:
                             )
 
                         if (
-                            not wav_path.exists()
-                            or wav_path.stat().st_size < 128
+                            not wav_candidate.exists()
+                            or wav_candidate.stat().st_size < 128
                         ):
                             raise RuntimeError(
                                 "Движок не создал корректный WAV-файл."
                             )
 
-                        generated_wav_info = get_wav_info(
-                            wav_path
-                        )
+                        generated_wav_info = get_wav_info(wav_candidate)
                         if (
-                            not generated_wav_info
-                            or not generated_wav_info.get(
-                                "appears_complete",
-                                False,
-                            )
+                            not generated_wav_info.get("appears_complete")
+                            or not generated_wav_info.get("frames")
                         ):
                             raise RuntimeError(
                                 "Движок создал неполный или повреждённый WAV-файл."
                             )
 
+                        if self.cancel_event.is_set():
+                            raise InterruptedError("Операция остановлена пользователем.")
+                        wav_candidate.replace(wav_path)
                         success = True
                         break
 
@@ -401,6 +427,8 @@ class TaskConversionWorkerMixin:
 
                         if attempt < max_attempts:
                             time.sleep(0.8 * attempt)
+                    finally:
+                        wav_candidate.unlink(missing_ok=True)
 
                 elapsed = time.perf_counter() - chunk_started
 
@@ -475,7 +503,7 @@ class TaskConversionWorkerMixin:
                 temp_wav_bytes += wav_size
                 max_wav_bytes = max(max_wav_bytes, wav_size)
 
-                wav_info = get_wav_info(wav_path)
+                wav_info = generated_wav_info
                 sampled_audio_sec += float(
                     wav_info.get("duration_sec") or 0
                 )
@@ -723,6 +751,27 @@ class TaskConversionWorkerMixin:
             # CODEX-REGION: ffmpeg-assembly
             stage = "ffmpeg"
             self.current_job_stage = stage
+            if len(wav_files) != len(chunks):
+                raise RuntimeError("Часть звуковых фрагментов отсутствует. MP3 не создан.")
+
+            # FFmpeg's concat demuxer expects matching streams. Measure exact
+            # sample counts before encoding instead of summing rounded durations.
+            wav_format = None
+            expected_audio_frames = 0
+            for path in wav_files:
+                info = get_wav_info(path)
+                if not info.get("appears_complete") or not info.get("frames"):
+                    raise RuntimeError("Один из звуковых фрагментов пуст или повреждён.")
+                current_format = (
+                    info["sample_rate_hz"], info["channels"], info["sample_width_bits"],
+                )
+                if wav_format is None:
+                    wav_format = current_format
+                if current_format != wav_format:
+                    raise RuntimeError("Форматы звуковых фрагментов не совпадают. MP3 не создан.")
+                expected_audio_frames += info["frames"]
+            expected_audio_sec = expected_audio_frames / wav_format[0]
+
             temp_free_before_ffmpeg = safe_disk_free_bytes(
                 work_dir
             )
@@ -937,10 +986,14 @@ class TaskConversionWorkerMixin:
                     )
                     last_ffmpeg_heartbeat[0] = now_perf
 
+            output_staging = tempfile.TemporaryDirectory(
+                prefix=".zeter-voice-mp3-", dir=output_path.parent, ignore_cleanup_errors=True,
+            )
+            candidate_mp3 = Path(output_staging.name) / "audio.mp3"
             ffmpeg_result = run_ffmpeg_concat(
                 ffmpeg=ffmpeg,
                 wav_files=wav_files,
-                output_mp3=output_path,
+                output_mp3=candidate_mp3,
                 bitrate=bitrate,
                 work_dir=work_dir,
                 cancel_event=self.cancel_event,
@@ -949,17 +1002,20 @@ class TaskConversionWorkerMixin:
             ffmpeg_duration = float(
                 ffmpeg_result.get("duration_sec") or 0
             )
-            ffmpeg_audio_duration = float(
-                ffmpeg_result.get("audio_duration_sec") or 0
-            )
+            ffmpeg_audio_duration = expected_audio_sec
+            if ffmpeg_result.get("stderr_tail"):
+                raise FfmpegError(
+                    "FFmpeg сообщил об ошибке при сборке звуковых фрагментов.",
+                    stderr=str(ffmpeg_result["stderr_tail"]),
+                )
 
             # CODEX-REGION: validate-success
             stage = "validate_output"
             self.current_job_stage = stage
 
             if (
-                not output_path.exists()
-                or output_path.stat().st_size == 0
+                not candidate_mp3.exists()
+                or candidate_mp3.stat().st_size == 0
             ):
                 raise RuntimeError(
                     "Итоговый MP3 не найден после завершения обработки."
@@ -978,10 +1034,13 @@ class TaskConversionWorkerMixin:
 
             output_validation = validate_final_mp3(
                 ffmpeg,
-                output_path,
+                candidate_mp3,
                 ffmpeg_audio_duration,
+                self.cancel_event,
             )
-            if output_validation.get("fatal_error"):
+            validation_error = output_validation.get("fatal_error")
+
+            if validation_error:
                 self.app.logger.event(
                     "output_validation_failed",
                     task_id=run_id,
@@ -990,28 +1049,28 @@ class TaskConversionWorkerMixin:
                     output_path=str(output_path),
                     validation=output_validation,
                 )
-                raise RuntimeError(
-                    str(output_validation["fatal_error"])
-                )
+                raise RuntimeError(str(validation_error))
 
-            if not output_validation.get("validated"):
+            self.app.logger.event(
+                "output_validated",
+                task_id=run_id,
+                run_id=run_id,
+                tab_id=self.workspace_id,
+                output_path=str(output_path),
+                validation=output_validation,
+            )
+            if self.cancel_event.is_set():
+                raise InterruptedError("Операция остановлена пользователем.")
+            stage = "publish_output"
+            self.current_job_stage = stage
+            published_path = publish_mp3(candidate_mp3, output_path, approved_output_identity)
+            if published_path != output_path:
                 self.app.logger.event(
-                    "output_validation_warning",
-                    task_id=run_id,
-                    run_id=run_id,
-                    tab_id=self.workspace_id,
-                    output_path=str(output_path),
-                    validation=output_validation,
+                    "output_path_collision", task_id=run_id, run_id=run_id,
+                    tab_id=self.workspace_id, requested_path=str(output_path),
+                    output_path=str(published_path),
                 )
-            else:
-                self.app.logger.event(
-                    "output_validated",
-                    task_id=run_id,
-                    run_id=run_id,
-                    tab_id=self.workspace_id,
-                    output_path=str(output_path),
-                    validation=output_validation,
-                )
+            output_path = published_path
 
             duration = time.perf_counter() - started_perf
             output_size = output_path.stat().st_size
@@ -1269,16 +1328,9 @@ class TaskConversionWorkerMixin:
                 preserve_recovery_on_exit = True
                 try:
                     if "write_recovery_state" in locals():
-                        completed_for_recovery = (
-                            resumed_existing_chunks
-                            + len(chunk_durations)
-                        )
                         write_recovery_state(
                             "failed",
-                            min(
-                                len(chunks),
-                                completed_for_recovery,
-                            ),
+                            len(wav_files),
                         )
                 except Exception:
                     pass
@@ -1287,10 +1339,7 @@ class TaskConversionWorkerMixin:
                 **base_context,
                 "stage": stage,
                 "chunks": len(chunks),
-                "completed_chunks": (
-                    resumed_existing_chunks
-                    + len(chunk_durations)
-                ),
+                "completed_chunks": len(wav_files),
                 "retry_count": retry_count,
                 "last_chunk_duration_sec": (
                     round(chunk_durations[-1], 3)
@@ -1415,6 +1464,8 @@ class TaskConversionWorkerMixin:
         # CODEX-REGION: final-cleanup
         finally:
             self.current_job_stage = "cleanup"
+            if output_staging is not None:
+                output_staging.cleanup()
             if (
                 work_dir is not None
                 and not preserve_recovery_on_exit

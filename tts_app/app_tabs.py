@@ -239,17 +239,16 @@ class AppTabsMixin:
         finally:
             self.tabs.pop(task.task_id, None)
 
-        try:
-            text_path.unlink(missing_ok=True)
-        except OSError as exc:
-            self.logger.event(
-                "workspace_tab_file_delete_failed",
-                path=str(text_path),
-                error=f"{type(exc).__name__}: {exc}",
-            )
-
         if not self.tabs:
             self.new_tab(save_workspace=False)
 
         self.renumber_default_tabs()
-        self.save_workspace()
+        if self.save_workspace():
+            try:
+                text_path.unlink(missing_ok=True)
+            except OSError as exc:
+                self.logger.event(
+                    "workspace_tab_file_delete_failed",
+                    path=str(text_path),
+                    error=f"{type(exc).__name__}: {exc}",
+                )

@@ -75,8 +75,14 @@ def main() -> None:
                         import edge_tts as edge_module
                         edge_tts = edge_module
                     code = 'synthesis'
-                    asyncio.run(edge_tts.Communicate(request['text'], speaker,
-                                                     connect_timeout=10, receive_timeout=30).save(str(target)))
+                    speech = edge_tts.Communicate(request['text'], speaker,
+                                                  connect_timeout=10, receive_timeout=30)
+                    asyncio.run(speech.save(str(target)))
+                    size = target.stat().st_size
+                    # In Edge TTS 7.3.1 a turn's bytes are added to this counter
+                    # only at turn.end. save() can return with an unfinished turn.
+                    if not size or speech.state.get('cumulative_audio_bytes') != size:
+                        raise RuntimeError('incomplete Edge TTS response')
             response = {'id': request_id, 'ok': True}
         except Exception:
             response = {'id': request_id, 'ok': False, 'code': code, 'message': ERRORS[code]}

@@ -25,17 +25,39 @@ class AppShutdownMixin:
         return alive
 
     def _finalize_close(self, status: str) -> None:
+        if self._workspace_write is not None and not self._workspace_write[0].done():
+            self.root.after(100, self._poll_shutdown)
+            return
+        if not self.save_workspace():
+            self.logger.event("shutdown_workspace_save_failed")
+            self.shutdown_in_progress = False
+            messagebox.showerror(
+                APP_TITLE,
+                "Не удалось сохранить вкладки. Окно оставлено открытым, "
+                "чтобы сохранить текст. Проверьте доступ к папке программы "
+                "и попробуйте закрыть окно ещё раз.",
+                parent=self.root,
+            )
+            return
+
+        if status == "forced_shutdown":
+            self.logger.event(
+                "forced_shutdown",
+                alive_threads=self._alive_background_threads(),
+                grace_period_sec=SHUTDOWN_GRACE_SEC,
+            )
+        manager = getattr(self, "engine_manager", None)
+        if manager:
+            manager.close()
+
         for workspace_id in list(
             self.tab_hotkey_monitors
         ):
             self._stop_tab_hotkey_monitor(
                 workspace_id
             )
+        GlobalCopyHotkeyMonitor.stop_shared(self.root)
 
-        try:
-            self.save_workspace()
-        except Exception:
-            pass
         try:
             self.save_settings()
         except Exception:
@@ -55,11 +77,6 @@ class AppShutdownMixin:
             return
 
         if time.perf_counter() >= self.shutdown_deadline:
-            self.logger.event(
-                "forced_shutdown",
-                alive_threads=alive,
-                grace_period_sec=SHUTDOWN_GRACE_SEC,
-            )
             self._finalize_close("forced_shutdown")
             return
 
@@ -103,7 +120,7 @@ class AppShutdownMixin:
         self.shutdown_in_progress = True
         manager = getattr(self, 'engine_manager', None)
         if manager:
-            manager.close()
+            manager.stop.set()
         self.shutdown_deadline = (
             time.perf_counter() + SHUTDOWN_GRACE_SEC
         )
@@ -182,13 +199,13 @@ class AppShutdownMixin:
             task.preview_stop_event.set()
             task.preview_pause_event.clear()
 
-        # Save user text immediately. Final task logs are allowed to finish during
-        # the grace period before the logger is closed.
-        self.save_workspace()
-        self.save_settings()
-
         if not self._alive_background_threads():
             self._finalize_close("closed")
             return
 
+        # Preserve the current text before waiting for background work to stop.
+        # The final save still checks the text and metadata before closing.
+        if self._workspace_write is None:
+            self.save_workspace()
+        self.save_settings()
         self.root.after(100, self._poll_shutdown)

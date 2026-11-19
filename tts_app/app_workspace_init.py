@@ -135,6 +135,8 @@ class AppWorkspaceInitMixin:
         with ui_operation(self, "restore_workspace"):
             self._restore_workspace()
         self._activate_restored_tab_hotkeys()
+        if self._unread_workspace_tabs or self._workspace_manifest_needs_read:
+            self.root.after_idle(self._warn_unread_workspace_tabs)
 
         legacy_removed = cleanup_legacy_temp_workdirs()
         if legacy_removed:
@@ -222,33 +224,27 @@ class AppWorkspaceInitMixin:
     def _restore_workspace(self) -> None:
         entries: list[dict] = []
         selected_index = 0
+        self._unread_workspace_tabs: list[dict] = []
+        self._workspace_manifest_needs_read = False
 
-        if WORKSPACE_FILE.exists():
-            try:
-                payload = json.loads(
-                    WORKSPACE_FILE.read_text(encoding="utf-8")
-                )
-                if isinstance(payload, dict):
-                    raw_entries = payload.get("tabs", [])
-                    if isinstance(raw_entries, list):
-                        entries = [
-                            item for item in raw_entries
-                            if isinstance(item, dict)
-                        ]
-                    selected_index = clamp_int(
-                        payload.get("selected_index", 0),
-                        0,
-                        max(0, len(entries) - 1),
-                        0,
-                    )
-            except Exception as exc:
-                self.logger.error(
-                    task_id="app",
-                    stage="restore_workspace_manifest",
-                    exc=exc,
-                    traceback_text=traceback.format_exc(),
-                    context={"workspace_file": str(WORKSPACE_FILE)},
-                )
+        try:
+            payload = read_workspace_manifest(WORKSPACE_FILE)
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError) as exc:
+            self._workspace_manifest_needs_read = True
+            self.logger.error(
+                task_id="app",
+                stage="restore_workspace_manifest",
+                exc=exc,
+                traceback_text=traceback.format_exc(),
+                context={"workspace_file": str(WORKSPACE_FILE)},
+            )
+        else:
+            entries = payload["tabs"]
+            selected_index = clamp_int(
+                payload.get("selected_index", 0), 0, max(0, len(entries) - 1), 0,
+            )
 
         has_per_tab_hotkeys = any(
             "copy_hotkey" in entry
@@ -270,6 +266,7 @@ class AppWorkspaceInitMixin:
                 or TAB_HOTKEY_NONE_LABEL
             ).strip() or TAB_HOTKEY_NONE_LABEL
 
+        selected_frame = None
         for entry_index, entry in enumerate(entries):
             workspace_id = str(
                 entry.get("workspace_id") or uuid.uuid4().hex
@@ -280,18 +277,23 @@ class AppWorkspaceInitMixin:
             text_path = WORKSPACE_TEXT_DIR / Path(text_file_name).name
 
             try:
-                restored_text = (
-                    text_path.read_text(encoding="utf-8")
-                    if text_path.exists()
-                    else ""
-                )
-            except Exception as exc:
-                restored_text = ""
+                restored_text = text_path.read_bytes().decode("utf-8")
+            except (OSError, UnicodeError) as exc:
+                if isinstance(exc, FileNotFoundError) and not entry.get("text_restore_pending"):
+                    restored_text = ""
+                    read_error = None
+                else:
+                    restored_text = ""
+                    read_error = exc
+            else:
+                read_error = None
+
+            if read_error is not None:
                 self.logger.error(
                     task_id="app",
                     stage="restore_workspace_text",
-                    exc=exc,
-                    traceback_text=traceback.format_exc(),
+                    exc=read_error,
+                    traceback_text="".join(traceback.format_exception(read_error)),
                     context={"text_path": str(text_path)},
                 )
 
@@ -333,19 +335,34 @@ class AppWorkspaceInitMixin:
                 # automatic names and should be renumbered, not preserved.
                 custom_title = not is_automatic_tab_title(raw_title)
 
-            self.new_tab(
-                title=raw_title,
-                workspace_id=workspace_id,
+            if read_error is not None:
+                # Keep the original file and its bookmark in the manifest.
+                # New input goes to an independent tab with its own path.
+                self._unread_workspace_tabs.append({
+                    **entry,
+                    "workspace_id": workspace_id,
+                    "text_file": text_file_name,
+                    "copy_hotkey": TAB_HOTKEY_NONE_LABEL,
+                    "text_restore_pending": True,
+                })
+                if entry.get("text_restore_pending"):
+                    continue
+
+            task = self.new_tab(
+                title=(raw_title or "Вкладка") + " — новый текст" if read_error else raw_title,
+                workspace_id=None if read_error else workspace_id,
                 restored_text=restored_text,
                 restored_settings=restored_settings,
                 restored_preview_bookmark=(
                     entry.get("preview_bookmark")
-                    if isinstance(entry.get("preview_bookmark"), dict)
+                    if read_error is None and isinstance(entry.get("preview_bookmark"), dict)
                     else None
                 ),
-                custom_title=custom_title,
+                custom_title=bool(read_error) or custom_title,
                 save_workspace=False,
             )
+            if entry_index == selected_index:
+                selected_frame = task.frame
 
         if not self.tabs:
             self.new_tab(save_workspace=False)
@@ -355,10 +372,32 @@ class AppWorkspaceInitMixin:
         self.renumber_default_tabs()
 
         try:
-            if self.notebook.tabs():
-                self.notebook.select(selected_index)
+            if selected_frame is not None:
+                self.notebook.select(selected_frame)
         except tk.TclError:
             pass
 
         self.settings["global_copy_enabled"] = False
         self.schedule_workspace_save()
+
+    def _warn_unread_workspace_tabs(self) -> None:
+        if self.shutdown_in_progress:
+            return
+        if self._workspace_manifest_needs_read:
+            messagebox.showwarning(
+                APP_TITLE,
+                "Не удалось открыть список вкладок. Верните доступ к workspace.json, "
+                "затем закройте и снова запустите программу. До восстановления доступа "
+                "новый текст остаётся в открытом окне.",
+                parent=self.root,
+            )
+            return
+        if not self._unread_workspace_tabs:
+            return
+        messagebox.showwarning(
+            APP_TITLE,
+            f"Не удалось открыть текст вкладок: {len(self._unread_workspace_tabs)}. "
+            "Прежние файлы защищены от записи. Новый текст сохраняется отдельно. "
+            "После восстановления доступа перезапустите программу.",
+            parent=self.root,
+        )

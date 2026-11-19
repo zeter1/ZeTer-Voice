@@ -6,7 +6,21 @@ from .text_processing import *
 def read_text_file(path: Path) -> str:
     data = path.read_bytes()
 
-    for encoding in ("utf-8-sig", "utf-16", "cp1251", "utf-8"):
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return data.decode("utf-16")
+
+    # Preserve BOM-less UTF-16 with a clear zero-byte lane without treating
+    # arbitrary even-length Windows-1251 as UTF-16.
+    if len(data) >= 2 and len(data) % 2 == 0 and b"\x00" in data:
+        even, odd = data[::2].count(0), data[1::2].count(0)
+        if max(even, odd) > 4 * min(even, odd) and max(even, odd) * 4 >= len(data):
+            encoding = "utf-16-le" if odd > even else "utf-16-be"
+            try:
+                return data.decode(encoding)
+            except UnicodeDecodeError:
+                pass
+
+    for encoding in ("utf-8-sig", "cp1251"):
         try:
             return data.decode(encoding)
         except UnicodeDecodeError:
@@ -35,6 +49,7 @@ def get_sapi_voices() -> list[str]:
     import win32com.client  # type: ignore
 
     pythoncom.CoInitialize()
+    voice = tokens = None
     try:
         voice = win32com.client.Dispatch("SAPI.SpVoice")
         tokens = voice.GetVoices()
@@ -43,6 +58,8 @@ def get_sapi_voices() -> list[str]:
             for index in range(tokens.Count)
         ]
     finally:
+        # Release the COM proxies while this thread still owns its apartment.
+        tokens = voice = None
         pythoncom.CoUninitialize()
 
 def set_voice_by_description(sp_voice, description: str) -> None:
@@ -239,20 +256,24 @@ def synthesize_wav_once(
     )
 
     stream = win32com.client.Dispatch("SAPI.SpFileStream")
+    spoken = False
     try:
         stream.Open(str(wav_path), SSFM_CREATE_FOR_WRITE, False)
         sp_voice.AudioOutputStream = stream
         sp_voice.Speak(speak_text, speak_flags)
+        spoken = True
     finally:
         try:
             stream.Close()
         except Exception:
-            pass
-        try:
-            sp_voice.AudioOutputStream = None
-        except Exception:
-            pass
+            if spoken:
+                raise
+        finally:
+            try:
+                sp_voice.AudioOutputStream = None
+            except Exception:
+                pass
 
-        del stream
-        del sp_voice
-        pythoncom.PumpWaitingMessages()
+            del stream
+            del sp_voice
+            pythoncom.PumpWaitingMessages()

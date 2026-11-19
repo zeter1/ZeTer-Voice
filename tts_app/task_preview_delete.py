@@ -32,6 +32,14 @@ class TaskPreviewDeleteMixin:
             except tk.TclError:
                 limit = "end-1c"
 
+            if (
+                self.text_box.compare(end_index, ">", limit)
+                or self.text_box.get(start_index, end_index) != self.preview_pending_delete_text
+            ):
+                self.preview_pending_delete_active = False
+                self.preview_delete_conflicted = True
+                return 0
+
             while self.text_box.compare(delete_end, "<", limit):
                 ch = self.text_box.get(
                     delete_end,
@@ -94,7 +102,6 @@ class TaskPreviewDeleteMixin:
         if not self.current_preview_follow_end:
             return None
 
-        full_text = self._full_text()
         try:
             start_index = self.text_box.index(
                 self.preview_snapshot_end_mark
@@ -105,7 +112,7 @@ class TaskPreviewDeleteMixin:
                     0,
                     min(
                         int(self.current_preview_snapshot_end),
-                        len(full_text),
+                        len(self._full_text()),
                     ),
                 )
             )
@@ -119,7 +126,7 @@ class TaskPreviewDeleteMixin:
             return None
 
         tail = self.text_box.get(start_index, end_index)
-        if not normalize_text(tail):
+        if not any(ch.isalnum() for ch in normalize_text(tail)):
             return None
 
         return tail, start_index

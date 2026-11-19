@@ -8,6 +8,96 @@ class FfmpegError(RuntimeError):
         self.stderr = stderr
 
 
+def mp3_target_identity(path: Path) -> tuple[int, ...] | None:
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        return None
+    return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+
+
+def _replace_approved_mp3_on_windows(
+    candidate: Path, target: Path, approved_identity: tuple[int, ...],
+) -> bool:
+    import pywintypes
+    import win32con
+    import win32file
+
+    # Both renames refuse to overwrite a file that arrived in the meantime.
+    # Keep the displaced copy outside candidate staging until publication succeeds.
+    backup_dir = Path(tempfile.mkdtemp(prefix=".zeter-voice-mp3-original-", dir=target.parent))
+    backup = backup_dir / target.name
+    displaced = published = False
+    read_lock = None
+    try:
+        try:
+            target.rename(backup)
+        except (FileNotFoundError, PermissionError):
+            return False
+        displaced = True
+        # A writer can have an open handle that permits rename. Deny writes
+        # before comparing the displaced file and until its approved removal.
+        try:
+            read_lock = win32file.CreateFile(
+                str(backup), win32con.GENERIC_READ,
+                win32con.FILE_SHARE_READ | win32con.FILE_SHARE_DELETE,
+                None, win32con.OPEN_EXISTING, 0, None,
+            )
+        except pywintypes.error:
+            return False
+        if mp3_target_identity(backup) != approved_identity:
+            return False
+        try:
+            candidate.rename(target)
+        except FileExistsError:
+            return False
+        published = True
+        return True
+    finally:
+        if displaced:
+            try:
+                if published:
+                    backup.unlink()
+                else:
+                    backup.rename(target)
+            except OSError:
+                # A new occupant or lock can prevent restoration. In that case,
+                # leave the recording in its unique recovery directory.
+                pass
+        if read_lock is not None:
+            read_lock.Close()
+        try:
+            backup_dir.rmdir()
+        except OSError:
+            pass
+
+
+def publish_mp3(
+    candidate: Path, target: Path, approved_identity: tuple[int, ...] | None,
+) -> Path:
+    if (
+        os.name == "nt"
+        and approved_identity is not None
+        and mp3_target_identity(target) == approved_identity
+        and _replace_approved_mp3_on_windows(candidate, target, approved_identity)
+    ):
+        return target
+
+    # Windows rename fails if another process already created the target.
+    # On POSIX, use a same-volume hard link for the same no-overwrite rule.
+    for number in range(1, 10_001):
+        destination = target if number == 1 else target.with_stem(f"{target.stem} ({number})")
+        try:
+            if os.name == "nt":
+                candidate.rename(destination)
+            else:
+                os.link(candidate, destination)
+        except FileExistsError:
+            continue
+        return destination
+    raise FileExistsError("Не удалось подобрать свободное имя для MP3.")
+
+
 def _parse_ffmpeg_clock(value: str) -> float | None:
     try:
         hours, minutes, seconds = value.strip().split(":")
@@ -70,6 +160,8 @@ def run_ffmpeg_concat(
         "libmp3lame",
         "-b:a",
         bitrate,
+        "-write_xing",
+        "1",
         "-progress",
         "pipe:1",
         "-nostats",

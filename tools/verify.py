@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 COMMANDS = [
-    [sys.executable, "-m", "compileall", "-q", "text_to_mp3.py", "tts_app"],
+    [sys.executable, "-m", "compileall", "-q", "ZeTer Voice.py", "tts_app"],
     [sys.executable, "tools/smoke_refactor.py"],
     [sys.executable, "tools/verify_structure.py"],
     [sys.executable, "tools/test_logging_compact.py"],
@@ -18,6 +18,11 @@ COMMANDS = [
     [sys.executable, "tools/test_engine_runtime.py"],
     [sys.executable, "tools/test_runtime_resilience.py"],
     [sys.executable, "tools/test_reliability_followup.py"],
+    [sys.executable, "tools/test_workspace_shutdown.py"],
+    [sys.executable, "tools/test_capture_large_text.py"],
+    [sys.executable, "tools/test_mp3_preparation.py"],
+    [sys.executable, "tools/test_mp3_text_integrity.py"],
+    [sys.executable, "tools/test_text_save_capture_regressions.py"],
     [sys.executable, "tools/test_conversion_notifications.py"],
     [sys.executable, "tools/build_code_index.py"],
 ]

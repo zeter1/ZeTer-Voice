@@ -78,6 +78,7 @@ class TaskPreviewPlayerMixin:
         self.current_preview_base_index = ui_base_index
         self.preview_deleted_chars = 0
         self.preview_pending_delete_active = False
+        self.preview_delete_conflicted = False
 
         self.current_preview_base_text_offset = self._text_offset_from_index(
             ui_base_index
@@ -87,7 +88,12 @@ class TaskPreviewPlayerMixin:
         )
         self.current_preview_segment_end = self.current_preview_segment_start
 
-        full_text_chars = len(self._full_text())
+        # The capture caller already has the exact suffix that it inserted
+        # at the end. Only its Python base offset needs a widget read.
+        if source_mode == "external_capture":
+            full_text_chars = self.current_preview_base_text_offset + len(raw_text)
+        else:
+            full_text_chars = len(self._full_text())
         self.current_preview_snapshot_end = min(
             full_text_chars,
             self.current_preview_segment_start + len(raw_text),
@@ -130,10 +136,11 @@ class TaskPreviewPlayerMixin:
         else:
             self.status_var.set("Воспроизвожу текст…")
 
-        self.log_text_state(
-            "preview_started",
-            force=True,
-        )
+        if source_mode != "external_capture":
+            self.log_text_state(
+                "preview_started",
+                force=True,
+            )
 
         self.app.logger.event(
             "preview_started",
@@ -215,6 +222,7 @@ class TaskPreviewPlayerMixin:
                                 **info,
                                 "base_index": ui_base_index,
                                 "preview_run_id": preview_run_id,
+                                "raw_segment": raw_text[info["start"]:info["end"]],
                             },
                         )
                     )
@@ -363,6 +371,8 @@ class TaskPreviewPlayerMixin:
 
         # Keep the newest completed sentence as a one-sentence buffer.
         self._delete_pending_read_segment()
+        if getattr(self, "preview_delete_conflicted", False):
+            return
 
         try:
             base_index = str(
@@ -388,6 +398,11 @@ class TaskPreviewPlayerMixin:
                 f"{base_index}+{adjusted_end}c"
             )
 
+            raw_segment = info.get("raw_segment")
+            if not raw_segment or self.text_box.get(start_index, end_index) != raw_segment:
+                self.preview_delete_conflicted = True
+                return
+            self.preview_pending_delete_text = raw_segment
             self.text_box.mark_set(
                 self.preview_pending_delete_start_mark,
                 start_index,
@@ -402,7 +417,7 @@ class TaskPreviewPlayerMixin:
             )
             self.text_box.mark_gravity(
                 self.preview_pending_delete_end_mark,
-                "right",
+                "left",
             )
             self.preview_pending_delete_active = True
 

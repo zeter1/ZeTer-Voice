@@ -45,8 +45,12 @@ def main() -> int:
     for info in pkgutil.iter_modules(tts_app.__path__, prefix="tts_app."):
         imported_modules.append(importlib.import_module(info.name))
 
-    import text_to_mp3
-    imported_modules.append(text_to_mp3)
+    entry_spec = importlib.util.spec_from_file_location(
+        "zeter_voice_entrypoint", ROOT / "ZeTer Voice.py",
+    )
+    entrypoint = importlib.util.module_from_spec(entry_spec)
+    entry_spec.loader.exec_module(entrypoint)
+    imported_modules.append(entrypoint)
 
     # compileall/import-only checks miss names that are resolved only when a
     # method is actually called (the exact class of regression that once broke
@@ -94,6 +98,7 @@ def main() -> int:
     from tts_app import runtime
     from tts_app.problem_logger import ProblemLogger
     from tts_app.windows_tools import GlobalCopyHotkeyMonitor
+    from tts_app.windows_hotkey_capture import WindowsCopyCapture
 
     required_runtime = {
         "APP_VERSION",
@@ -114,7 +119,8 @@ def main() -> int:
 
     for cls, names in (
         (ProblemLogger, ("event", "error", "task_started", "_write_diagnostic_summary", "close")),
-        (GlobalCopyHotkeyMonitor, ("parse_hotkey", "enable", "_wait_for_clipboard_change", "_windows_keyboard_hook_loop")),
+        (GlobalCopyHotkeyMonitor, ("parse_hotkey", "enable", "stop_shared")),
+        (WindowsCopyCapture, ("_wait_for_clipboard_change", "_windows_keyboard_hook_loop")),
     ):
         missing = [name for name in names if not hasattr(cls, name)]
         if missing:

@@ -176,6 +176,7 @@ class TaskPreviewControlsMixin:
         *,
         preserve_bookmark: bool = False,
         reason: str = "user_stop",
+        force_bookmark_save: bool = True,
     ) -> None:
         if reason == "user_stop":
             self.preview_resume_previous_pending = False
@@ -210,7 +211,7 @@ class TaskPreviewControlsMixin:
                     reason=reason,
                     absolute_offset=self.current_preview_segment_start,
                     word_length=max(1, self.current_preview_word_length),
-                    force_save=True,
+                    force_save=force_bookmark_save,
                 )
             self.preview_keep_bookmark_after_stop = True
         elif not preserve_bookmark:

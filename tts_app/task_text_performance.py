@@ -8,7 +8,8 @@ from tkinter import messagebox
 
 # Word-wrapping a logical line with millions of chars can stall native Tk.
 LONG_LINE_NO_WRAP_THRESHOLD = 20_000
-_SENTENCE_END = re.compile(r"[.!?…]+(?=\s|$)")
+_SENTENCE_END = re.compile(r"(?<![.!?…])[.!?…]+(?=\s|$)")
+_SENTENCE_SAMPLE_CHARS = 32_768
 
 
 def has_long_line(text: str, threshold: int = LONG_LINE_NO_WRAP_THRESHOLD) -> bool:
@@ -25,10 +26,59 @@ def has_long_line(text: str, threshold: int = LONG_LINE_NO_WRAP_THRESHOLD) -> bo
         start = end + 1
 
 
+def estimate_sentence_count(text: str) -> int:
+    chars = len(text)
+    width = _SENTENCE_SAMPLE_CHARS
+    sampled_chars = 3 * width
+    if chars <= sampled_chars:
+        count = sum(1 for _ in _SENTENCE_END.finditer(text))
+        if chars and not count:
+            return sum(1 for line in text.splitlines() if line.strip()) or 1
+        return count
+
+    # The queue label is approximate. Bound the regex scan even for many MB
+    # of punctuation or frequent appends, and sample across the document.
+    starts = (0, (chars - width) // 2, chars - width)
+    count = sum(
+        1 for start in starts for _ in _SENTENCE_END.finditer(text[start:start + width])
+    )
+    if count:
+        return max(1, round(count * chars / sampled_chars))
+    return max(1, text.count("\n") + int(not text.endswith("\n")))
+
+
 class TaskTextPerformanceMixin:
     def configure_text_view_for_content(self, text: str, *, origin: str) -> None:
-        large_line = has_long_line(text)
         self._text_metrics_cache = None
+        self._configure_text_view(has_long_line(text), text_chars=len(text), origin=origin)
+
+    def _prepare_text_insertion(
+        self, text: str, index: str, *, origin: str, replace_end: str | None = None,
+    ) -> None:
+        if not self._word_wrap_var.get() or self._manual_wrap_large_line:
+            return
+        # A paste can make the receiving line too long even when all of the
+        # pasted lines are short. Check both join points before Tk lays out text.
+        column = int(index.split(".")[1])
+        suffix_index = replace_end or index
+        end_column = int(self.text_box.index(f"{suffix_index} lineend").split(".")[1])
+        suffix_chars = end_column - int(suffix_index.split(".")[1])
+        first_break = text.find("\n")
+        if first_break == -1:
+            longest_join = column + len(text) + suffix_chars
+        else:
+            longest_join = max(column + first_break, len(text) - text.rfind("\n") - 1 + suffix_chars)
+        if longest_join >= LONG_LINE_NO_WRAP_THRESHOLD or has_long_line(text):
+            self._configure_text_view(True, text_chars=len(text), origin=origin)
+
+    def _see_paste_caret(self) -> None:
+        line_length = int(self.text_box.index("insert lineend").split(".")[1])
+        # Scrolling right to the end of a huge line stalls Windows Tk on redraw,
+        # even with wrap disabled. Move the viewport without moving the caret.
+        index = "insert linestart" if line_length >= LONG_LINE_NO_WRAP_THRESHOLD else "insert"
+        self.text_box.see(index)
+
+    def _configure_text_view(self, large_line: bool, *, text_chars: int, origin: str) -> None:
         self._display_long_line = large_line
         self._word_wrap_auto_disabled = large_line
         self._manual_wrap_large_line = False
@@ -39,7 +89,7 @@ class TaskTextPerformanceMixin:
             self.app.logger.event(
                 "large_text_view_optimized", task_id=self.task_id,
                 tab_id=self.workspace_id, source=origin,
-                text_chars=len(text), threshold_chars=LONG_LINE_NO_WRAP_THRESHOLD,
+                text_chars=text_chars, threshold_chars=LONG_LINE_NO_WRAP_THRESHOLD,
                 wrap="none", user_content_logged=False,
             )
 
@@ -87,9 +137,7 @@ class TaskTextPerformanceMixin:
             # A single retrieval per modified version. Cache numbers/hashes, not text.
             text = self._full_text()
             chars = len(text)
-            count = sum(1 for _ in _SENTENCE_END.finditer(text))
-            if chars and not count:
-                count = sum(1 for line in text.splitlines() if line.strip()) or 1
+            count = estimate_sentence_count(text)
             cache = {"chars": chars, "sentences": count}
             if include_hash:
                 cache["sha16"] = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]

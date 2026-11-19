@@ -8,6 +8,19 @@ from .ffmpeg_tools import *
 from .windows_tools import *
 from .widgets import *
 
+
+CAPTURE_FAILURE_STATUS = {
+    "capture_busy": "Предыдущий захват ещё идёт. После завершения выделите текст снова и повторите.",
+    "clipboard_empty": "Буфер не получил текста. Проверьте выделение и повторите.",
+    "clipboard_needs_manual_copy": "Дождитесь конца копирования. Нажмите Ctrl+C, снова выделите текст и повторите.",
+    "clipboard_owner_changed": "Буфер обновило другое приложение. Выделите текст снова и повторите.",
+    "clipboard_read_failed": "Не удалось прочитать текст из буфера. Выделите его и повторите.",
+    "clipboard_send_failed": "Windows не принял команду копирования. Выделите текст и повторите.",
+    "clipboard_superseded": "Копирования наложились. Выделите текст и повторите захват по одному разу.",
+    "clipboard_timeout": "Источник не прислал текст вовремя. Нажмите Ctrl+C и снова выделите текст для захвата.",
+}
+
+
 class AppHotkeysMixin:
     def _normalized_tab_hotkey(
         self,
@@ -38,6 +51,7 @@ class AppHotkeysMixin:
             or wanted == TAB_HOTKEY_NONE_LABEL
         ):
             return None
+        parsed = GlobalCopyHotkeyMonitor.parse_hotkey(wanted)
 
         for task in self.tabs.values():
             if (
@@ -46,8 +60,12 @@ class AppHotkeysMixin:
                 == exclude_workspace_id
             ):
                 continue
-            if task.applied_copy_hotkey == wanted:
-                return task
+            current = task.applied_copy_hotkey
+            if current and current != TAB_HOTKEY_NONE_LABEL:
+                current_parsed = GlobalCopyHotkeyMonitor.parse_hotkey(current)
+                if (current_parsed["vks"] == parsed["vks"]
+                        and current_parsed["modifiers"] == parsed["modifiers"]):
+                    return task
         return None
 
     def _stop_tab_hotkey_monitor(
@@ -128,6 +146,18 @@ class AppHotkeysMixin:
             if save_workspace:
                 self.schedule_workspace_save()
             return True
+
+        unsafe = GlobalCopyHotkeyMonitor.unsafe_hotkey_reason(normalized)
+        if unsafe:
+            if silent:
+                # Keep legacy assignments in the workspace so they can be reassigned.
+                task.applied_copy_hotkey = task.copy_hotkey_var.get()
+                task.copy_hotkey_status_var.set(f"Неактивна. {unsafe}")
+                return True
+            task.copy_hotkey_var.set(previous)
+            task.copy_hotkey_status_var.set(unsafe)
+            messagebox.showwarning("Горячая клавиша", unsafe)
+            return False
 
         owner = self._task_hotkey_owner(
             normalized,
@@ -306,240 +336,52 @@ class AppHotkeysMixin:
     def _on_tab_copy_hotkey(
         self,
         workspace_id: str,
-        capture_info: dict | None = None,
+        capture_info: dict,
     ) -> None:
-        """
-        A hotkey is permanently routed to its owning tab, regardless of which
-        tab is currently selected on screen.
-        """
         if self.shutdown_in_progress:
             return
-
-        task = self._task_by_workspace_id(
-            workspace_id
-        )
-        monitor = self.tab_hotkey_monitors.get(
-            workspace_id
-        )
-        if (
-            task is None
-            or monitor is None
-            or not monitor.enabled
-        ):
+        task = self._task_by_workspace_id(workspace_id)
+        monitor = self.tab_hotkey_monitors.get(workspace_id)
+        if task is None or monitor is None or not monitor.enabled:
             return
 
         hotkey = monitor.get_hotkey()
-        info = dict(capture_info or {})
-        generation = info.get("capture_generation")
-        if (generation is not None
-                and generation != getattr(monitor, "_capture_generation", generation)):
+        rejected = capture_info.get("capture_rejected")
+        captured = capture_info.get("captured_text")
+        if not rejected and (not isinstance(captured, str) or not captured.strip()):
+            rejected = "clipboard_empty"
+        if rejected:
             self.logger.event(
-                "global_copy_capture_superseded",
-                task_id=task.task_id,
-                tab_id=task.workspace_id,
+                "global_copy_capture_rejected", task_id=task.task_id, tab_id=task.workspace_id,
+                hotkey=hotkey, reason=rejected, source_pid=capture_info.get("source_pid"),
+                copy_latency_ms=capture_info.get("copy_latency_ms"),
             )
+            task.status_var.set(CAPTURE_FAILURE_STATUS.get(
+                rejected, "Не удалось захватить текст. Выделите его и повторите.",
+            ))
             return
-        source_process = str(
-            info.get("source_process") or ""
-        )
-        source_pid = info.get("source_pid")
-        copy_latency_ms = float(
-            info.get("copy_latency_ms") or 0
-        )
 
-        if info.get("clipboard_changed") is False:
-            # Some applications update the clipboard a fraction of a second
-            # AFTER the normal timeout. Give them a bounded async grace period,
-            # but only accept a genuinely newer sequence (never stale text).
-            before = info.get("clipboard_sequence_before")
-            sequence = getattr(monitor, "_clipboard_sequence_number", lambda: None)()
-            if (before is not None and sequence is not None
-                    and int(sequence) != int(before)):
-                info["clipboard_changed"] = True
-                info["clipboard_sequence_after"] = sequence
-                info["clipboard_grace_recovered"] = True
-            else:
-                checks = int(info.get("clipboard_grace_checks") or 0)
-                if checks < 2 and not self.shutdown_in_progress:
-                    self.root.after(
-                        125,
-                        lambda: self._on_tab_copy_hotkey(
-                            workspace_id, {**info, "clipboard_grace_checks": checks + 1}
-                        ),
-                    )
-                    return
-                # A custom hotkey may precede Telegram's clipboard update.
-                # Retry Ctrl+C once, only if the ORIGINAL source window stays active.
-                original_hwnd = info.get("source_hwnd")
-                if (not info.get("clipboard_recopy_attempted")
-                        and source_pid and original_hwnd
-                        and hasattr(monitor, "_foreground_capture_context")
-                        and not monitor._hotkey_is_plain_ctrl_c()):
-                    foreground = monitor._foreground_capture_context()
-                    if (foreground.get("source_pid") == source_pid
-                            and foreground.get("source_hwnd") == original_hwnd):
-                        monitor._send_ctrl_c_to_active_window()
-                        self.logger.event(
-                            "global_copy_recapture_requested",
-                            task_id=task.task_id,
-                            tab_id=task.workspace_id,
-                            hotkey=hotkey,
-                            source_process=source_process,
-                        )
-                        self.root.after(
-                            125,
-                            lambda: self._on_tab_copy_hotkey(
-                                workspace_id,
-                                {**info, "clipboard_recopy_attempted": True,
-                                 "clipboard_grace_checks": 0},
-                            ),
-                        )
-                        return
-                self.logger.event(
-                    "global_copy_clipboard_timeout",
-                    task_id=task.task_id,
-                    tab_id=task.workspace_id,
-                    hotkey=hotkey,
-                    source_process=source_process,
-                    source_pid=source_pid,
-                    copy_latency_ms=copy_latency_ms,
-                    timeout_sec=CLIPBOARD_COPY_TIMEOUT_SEC,
-                    clipboard_grace_checks=checks,
-                )
-                task.status_var.set(
-                    "Не удалось дождаться нового текста в буфере обмена."
-                )
-                return
-
-        retries = int(info.get("clipboard_read_retries") or 0)
-        if retries and info.get("clipboard_sequence_after") is not None:
-            # Do not consume a *new* Ctrl+C when an older clipboard read is retried.
-            current_sequence = getattr(monitor, "_clipboard_sequence_number", lambda: None)()
-            if (current_sequence is not None
-                    and int(current_sequence) != int(info["clipboard_sequence_after"])):
-                self.logger.event(
-                    "global_copy_clipboard_retry_superseded",
-                    task_id=task.task_id, tab_id=task.workspace_id,
-                    clipboard_read_retries=retries,
-                )
-                return
-
-        try:
-            captured = self.root.clipboard_get()
-        except tk.TclError as exc:
-            if ("clipboard cannot be opened" in str(exc).lower()
-                    and retries < 4 and not self.shutdown_in_progress):
-                # Telegram/Windows may briefly own the clipboard after Ctrl+C.
-                # Retry on Tk's event loop rather than sleeping on the UI thread.
-                self.root.after(
-                    60,
-                    lambda: self._on_tab_copy_hotkey(
-                        workspace_id, {**info, "clipboard_read_retries": retries + 1}
-                    ),
-                )
-                return
+        sequence = capture_info["clipboard_sequence_after"]
+        if sequence is not None and sequence == getattr(monitor, "_last_appended_capture_sequence", None):
             self.logger.event(
-                "global_copy_clipboard_read_failed",
-                task_id=task.task_id,
-                tab_id=task.workspace_id,
-                hotkey=hotkey,
-                source_process=source_process,
-                source_pid=source_pid,
-                copy_latency_ms=copy_latency_ms,
-                clipboard_read_retries=retries,
-                error=f"{type(exc).__name__}: {exc}",
+                "global_copy_duplicate_skipped", task_id=task.task_id, tab_id=task.workspace_id,
+                hotkey=hotkey, clipboard_sequence=sequence,
             )
             return
 
-        if not isinstance(captured, str):
+        preview_running = bool(task.preview_thread and task.preview_thread.is_alive())
+        paused = bool(task.preview_is_paused)
+        auto_read = bool(task.auto_read_hotkey_var.get())
+        if not task.append_external_selected_text(captured):
             return
+        monitor._last_appended_capture_sequence = sequence
 
-        raw_captured = captured.strip()
-        if not raw_captured:
-            return
-
-        captured = sanitize_hotkey_capture_text(
-            raw_captured
-        )
-        # The whitelist can leave only punctuation after removing Latin text.
-        # SAPI legitimately emits no audio for it; do not enqueue such a capture
-        # or misreport its silence as an audio-output failure.
-        if not any(ch.isalnum() for ch in captured):
-            self.logger.event(
-                "global_copy_filtered_empty",
-                task_id=task.task_id,
-                tab_id=task.workspace_id,
-                hotkey=hotkey,
-                raw_chars=len(raw_captured),
-                filtered_chars=len(captured),
-                reason="no_letters_or_digits",
-                source_process=source_process,
-                source_pid=source_pid,
-                copy_latency_ms=copy_latency_ms,
-            )
-            task.status_var.set(
-                "После фильтрации нет русских букв или цифр для чтения."
-            )
-            return
-
-        removed_chars = max(
-            0,
-            len(raw_captured) - len(captured),
-        )
-
-        captured_hash = hashlib.sha256(
-            captured.encode("utf-8")
-        ).hexdigest()[:16]
-
-        if monitor.remember_text_and_check_duplicate(
-            captured
-        ):
-            self.logger.event(
-                "global_copy_duplicate_skipped",
-                task_id=task.task_id,
-                tab_id=task.workspace_id,
-                hotkey=hotkey,
-                chars=len(captured),
-                raw_chars=len(raw_captured),
-                filtered_chars=len(captured),
-                removed_chars=removed_chars,
-                captured_sha256_16=captured_hash,
-                source_process=source_process,
-                source_pid=source_pid,
-                copy_latency_ms=copy_latency_ms,
-            )
-            return
-
+        captured_hash = hashlib.sha256(captured.encode("utf-8")).hexdigest()[:16]
         self.logger.event(
-            "global_copy_text_captured",
-            task_id=task.task_id,
-            tab_id=task.workspace_id,
-            tab_title=task.tab_title(),
-            hotkey=hotkey,
-            routing_mode="fixed_tab",
-            chars=len(captured),
-            raw_chars=len(raw_captured),
-            filtered_chars=len(captured),
-            removed_chars=removed_chars,
-            captured_sha256_16=captured_hash,
-            source_process=source_process,
-            source_pid=source_pid,
-            copy_latency_ms=copy_latency_ms,
-            clipboard_changed=info.get(
-                "clipboard_changed"
-            ),
-            clipboard_read_retries=retries,
-            preview_running=bool(
-                task.preview_thread
-                and task.preview_thread.is_alive()
-            ),
-            paused=bool(task.preview_is_paused),
-            auto_read_hotkey_text=bool(
-                task.auto_read_hotkey_var.get()
-            ),
-        )
-
-        # Critical routing rule: DO NOT use current_tab() here.
-        task.append_external_selected_text(
-            captured
+            "global_copy_text_captured", task_id=task.task_id, tab_id=task.workspace_id,
+            tab_title=task.tab_title(), hotkey=hotkey, routing_mode="fixed_tab",
+            chars=len(captured), captured_sha256_16=captured_hash,
+            source_process=capture_info.get("source_process"), source_pid=capture_info.get("source_pid"),
+            copy_latency_ms=capture_info.get("copy_latency_ms"), clipboard_changed=True,
+            preview_running=preview_running, paused=paused, auto_read_hotkey_text=auto_read,
         )

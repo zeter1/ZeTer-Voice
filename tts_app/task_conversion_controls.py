@@ -27,6 +27,7 @@ class TaskConversionControlsMixin:
             title=f"Сохранить MP3 — {self.tab_title()}",
             defaultextension=".mp3",
             filetypes=[("MP3", "*.mp3")],
+            confirmoverwrite=False,
             **kwargs,
         )
         if not chosen:
@@ -44,12 +45,10 @@ class TaskConversionControlsMixin:
         if engine_operation_busy(self.app):
             messagebox.showinfo(APP_TITLE, 'Дождитесь завершения операции с движками или отмените её.')
             return
-        if self.worker and self.worker.is_alive():
+        if self.current_run_id or self.conversion_running():
             return
 
-        raw_text = self.text_box.get("1.0", "end-1c")
-        text = normalize_text(raw_text)
-        if not text:
+        if self.text_box.compare("1.0", "==", "end-1c"):
             messagebox.showwarning(
                 APP_TITLE,
                 "Вставьте текст.",
@@ -62,9 +61,20 @@ class TaskConversionControlsMixin:
             return
 
         output_path = self.ask_output_path()
-        if output_path is None:
+        if output_path is None or self.app.shutdown_in_progress or self.current_run_id:
             return
 
+        try:
+            approved_output_identity = mp3_target_identity(output_path)
+        except OSError as exc:
+            messagebox.showerror(APP_TITLE, f"Не удалось проверить путь MP3.\n{exc}")
+            return
+        if approved_output_identity is not None and not messagebox.askyesno(
+            APP_TITLE, f"Заменить существующий файл?\n{output_path}",
+        ):
+            return
+        if self.app.shutdown_in_progress or self.current_run_id:
+            return
         if self.app.output_is_used_by_other_task(self, output_path):
             messagebox.showwarning(
                 APP_TITLE,
@@ -73,11 +83,9 @@ class TaskConversionControlsMixin:
             )
             return
 
-        # The save dialog can stay open for a while. Capture the definitive
-        # source only after it closes, immediately before tracking and backup.
+        # Capture after both dialogs, immediately before tracking and backup.
         raw_text = self.text_box.get("1.0", "end-1c")
-        text = normalize_text(raw_text)
-        if not text:
+        if not raw_text or raw_text.isspace():
             messagebox.showwarning(
                 APP_TITLE,
                 "В тексте больше нет данных для создания MP3.",
@@ -88,10 +96,6 @@ class TaskConversionControlsMixin:
         pitch = clamp_int(self.pitch_var.get(), PITCH_MIN, PITCH_MAX, 0)
         volume = clamp_int(self.volume_var.get(), 0, 100, 100)
         bitrate = self.bitrate_var.get().strip() or "96k"
-        text_metrics = analyze_text_for_logging(
-            raw_text,
-            text,
-        )
         tab_title_snapshot = self.tab_title()
         visible_tab_index_snapshot = self.app.visible_tab_index(self)
 
@@ -114,85 +118,10 @@ class TaskConversionControlsMixin:
             )
             return
 
-        try:
-            backup_path = create_mp3_text_backup(
-                run_id,
-                tab_title_snapshot,
-                raw_text,
-            )
-        except Exception as exc:
-            self.discard_mp3_source_snapshot(
-                run_id,
-                reason="text_backup_failed",
-            )
-            self.app.log_ui_error(
-                task_id=run_id,
-                stage="create_mp3_text_backup",
-                exc=exc,
-                context={
-                    "backup_dir": str(
-                        MP3_TEXT_BACKUPS_DIR
-                    ),
-                    "source_chars": len(raw_text),
-                },
-            )
-            messagebox.showerror(
-                APP_TITLE,
-                "Не удалось создать обязательный бэкап текста. "
-                "Создание MP3 не запущено.\n\n"
-                f"{exc}",
-            )
-            return
-
-        self.current_mp3_text_backup_path = backup_path
-        self.app.logger.event(
-            "mp3_text_backup_created",
-            task_id=run_id,
-            run_id=run_id,
-            tab_id=self.workspace_id,
-            backup_path=str(backup_path),
-            source_chars=len(raw_text),
-            source_sha256_16=hashlib.sha256(
-                raw_text.encode("utf-8")
-            ).hexdigest()[:16],
-            retention_days=(
-                MP3_TEXT_BACKUP_RETENTION_DAYS
-            ),
+        self._launch_mp3_job(
+            run_id, raw_text, tab_title_snapshot, visible_tab_index_snapshot, output_path,
+            voice, rate, pitch, volume, bitrate, approved_output_identity=approved_output_identity,
         )
-
-        self.stop_preview(
-            preserve_bookmark=True,
-            reason="mp3_creation_started",
-        )
-        self.cancel_event.clear()
-        self.current_run_id = run_id
-        self.current_output_path = output_path
-        self.current_job_stage = "queued"
-
-        self.progress["value"] = 0
-        self.start_button.configure(state="disabled")
-        self.cancel_button.configure(state="normal")
-        self.status_var.set(f"Подготовка: {output_path.name}")
-
-        self.worker = threading.Thread(
-            target=self._job_worker,
-            args=(
-                run_id,
-                text,
-                text_metrics,
-                tab_title_snapshot,
-                visible_tab_index_snapshot,
-                output_path,
-                voice,
-                rate,
-                pitch,
-                volume,
-                bitrate,
-            ),
-            name=f"tts-{run_id}",
-            daemon=True,
-        )
-        self.worker.start()
 
     def resume_recovery_job(
         self,
@@ -201,7 +130,7 @@ class TaskConversionControlsMixin:
     ) -> bool:
         if engine_operation_busy(self.app):
             return False
-        if self.worker and self.worker.is_alive():
+        if self.current_run_id or self.conversion_running():
             return False
 
         raw_text = self.text_box.get("1.0", "end-1c")
@@ -274,10 +203,6 @@ class TaskConversionControlsMixin:
         self.volume_var.set(volume)
         self.bitrate_var.set(bitrate)
 
-        text_metrics = analyze_text_for_logging(
-            raw_text,
-            text,
-        )
         tab_title_snapshot = self.tab_title()
         visible_tab_index_snapshot = (
             self.app.visible_tab_index(self)
@@ -297,56 +222,22 @@ class TaskConversionControlsMixin:
             )
             return False
 
-        try:
-            backup_path = create_mp3_text_backup(
-                run_id,
-                tab_title_snapshot,
-                raw_text,
-            )
-        except Exception as exc:
-            self.discard_mp3_source_snapshot(
-                run_id,
-                reason="recovery_text_backup_failed",
-            )
-            self.app.log_ui_error(
-                task_id=run_id,
-                stage="create_recovery_mp3_text_backup",
-                exc=exc,
-                context={
-                    "backup_dir": str(
-                        MP3_TEXT_BACKUPS_DIR
-                    ),
-                    "source_chars": len(raw_text),
-                },
-            )
-            messagebox.showerror(
-                APP_TITLE,
-                "Не удалось создать обязательный бэкап текста. "
-                "Восстановление MP3 не запущено.\n\n"
-                f"{exc}",
-            )
-            return False
-
-        self.current_mp3_text_backup_path = backup_path
-        self.app.logger.event(
-            "mp3_text_backup_created",
-            task_id=run_id,
-            run_id=run_id,
-            tab_id=self.workspace_id,
-            backup_path=str(backup_path),
-            source_chars=len(raw_text),
-            source_sha256_16=hashlib.sha256(
-                raw_text.encode("utf-8")
-            ).hexdigest()[:16],
-            retention_days=(
-                MP3_TEXT_BACKUP_RETENTION_DAYS
-            ),
-            recovery_resume=True,
+        self._launch_mp3_job(
+            run_id, raw_text, tab_title_snapshot, visible_tab_index_snapshot, output_path,
+            voice, rate, pitch, volume, bitrate, work_dir=work_dir, normalized_text=text,
         )
+        return True
 
+    def _launch_mp3_job(
+        self, run_id: str, raw_text: str, tab_title: str, tab_index: int | None,
+        output_path: Path, voice: str, rate: int, pitch: int, volume: int, bitrate: str,
+        *, work_dir: Path | None = None, normalized_text: str | None = None,
+        approved_output_identity: tuple[int, ...] | None = None,
+    ) -> None:
         self.stop_preview(
             preserve_bookmark=True,
-            reason="mp3_recovery_started",
+            reason="mp3_recovery_started" if work_dir else "mp3_creation_started",
+            force_bookmark_save=False,
         )
         self.cancel_event.clear()
         self.current_run_id = run_id
@@ -356,31 +247,61 @@ class TaskConversionControlsMixin:
         self.progress["value"] = 0
         self.start_button.configure(state="disabled")
         self.cancel_button.configure(state="normal")
-        self.status_var.set(
-            "Продолжаю аварийно оборванную задачу…"
-        )
+        self.status_var.set(f"Подготовка текста и резервной копии: {output_path.name}")
 
-        self.worker = threading.Thread(
-            target=self._job_worker,
-            args=(
-                run_id,
-                text,
-                text_metrics,
-                tab_title_snapshot,
-                visible_tab_index_snapshot,
-                output_path,
-                voice,
-                rate,
-                pitch,
-                volume,
-                bitrate,
-                work_dir,
-            ),
-            name=f"tts-{run_id}-resume",
-            daemon=True,
-        )
+        def prepare_and_convert() -> None:
+            stage = "prepare_mp3_text"
+            try:
+                if self.cancel_event.is_set():
+                    raise InterruptedError
+                text = normalized_text if normalized_text is not None else normalize_text(raw_text)
+                if self.cancel_event.is_set():
+                    raise InterruptedError
+                if not text:
+                    self.app.events.put((self.task_id, "job_error", {
+                        "run_id": run_id, "user_message": "В тексте нет данных для создания MP3.",
+                    }))
+                    return
+                metrics = analyze_text_for_logging(raw_text, text)
+                if self.cancel_event.is_set():
+                    raise InterruptedError
+                stage = "create_mp3_text_backup"
+                self.current_mp3_text_backup_path = create_mp3_text_backup(
+                    run_id, tab_title, raw_text,
+                )
+                self.app.logger.event(
+                    "mp3_text_backup_created", task_id=run_id, run_id=run_id,
+                    tab_id=self.workspace_id, backup_path=str(self.current_mp3_text_backup_path),
+                    source_chars=len(raw_text), source_sha256_16=self.mp3_source_sha256[:16],
+                    retention_days=MP3_TEXT_BACKUP_RETENTION_DAYS, recovery_resume=bool(work_dir),
+                )
+                if self.cancel_event.is_set():
+                    raise InterruptedError
+            except InterruptedError:
+                self.app.events.put((self.task_id, "cancelled", {
+                    "run_id": run_id, "message": "Создание MP3 остановлено. Исходный текст сохранён.",
+                }))
+                return
+            except Exception as exc:
+                error_log = self.app.logger.error(
+                    task_id=run_id, stage=stage, exc=exc, traceback_text=traceback.format_exc(),
+                    context={"source_chars": len(raw_text), "tab_id": self.workspace_id},
+                )
+                self.app.events.put((self.task_id, "job_error", {
+                    "run_id": run_id, "error_log": error_log,
+                    "user_message": (
+                        "Не удалось создать обязательную резервную копию текста."
+                        if stage == "create_mp3_text_backup" else "Не удалось подготовить текст."
+                    ),
+                }))
+                return
+            self._job_worker(
+                run_id, text, metrics, tab_title, tab_index, output_path, voice, rate, pitch,
+                volume, bitrate, work_dir, approved_output_identity=approved_output_identity,
+            )
+
+        self.worker = threading.Thread(target=prepare_and_convert, name=f"tts-{run_id}", daemon=True)
         self.worker.start()
-        return True
 
     def cancel_job(self) -> None:
         if self.worker and self.worker.is_alive():

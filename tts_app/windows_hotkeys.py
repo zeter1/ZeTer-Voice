@@ -1,19 +1,15 @@
 from __future__ import annotations
 
 from .windows_hotkey_config import WindowsHotkeyConfigMixin
-from .windows_hotkey_capture import WindowsHotkeyCaptureMixin
 from .windows_hotkey_hook import WindowsHotkeyHookMixin
 
 class GlobalCopyHotkeyMonitor(
     WindowsHotkeyConfigMixin,
-    WindowsHotkeyCaptureMixin,
     WindowsHotkeyHookMixin,
 ):
     PRESET_HOTKEYS = (
         "F8",
         "F9",
-        "Q+W",
-        "Й+Ц",
         "Ctrl+C",
         "Ctrl+Shift+C",
         "Ctrl+Alt+C",

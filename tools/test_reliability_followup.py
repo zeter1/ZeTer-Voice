@@ -1,4 +1,4 @@
-"""Follow-up regressions for bounded UI dispatch and resilient Windows capture."""
+"""Follow-up regressions for bounded UI dispatch and deferred capture persistence."""
 from __future__ import annotations
 
 import queue
@@ -10,7 +10,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tts_app.app_event_dispatch import AppEventDispatchMixin
 from tts_app.app_audio_settings import AppAudioSettingsMixin
-from tts_app.app_hotkeys import AppHotkeysMixin
 from tts_app.task_capture import TaskCaptureMixin
 from tts_app.runtime_core import DEFAULT_AUDIO_OUTPUT_LABEL
 
@@ -72,55 +71,6 @@ class Tests(unittest.TestCase):
         app.events.put(("", "audio_outputs_error", {"exc": RuntimeError("COM trouble"), "traceback": "mock"}))
         app._process_events()
         self.assertTrue(any(ms == 12000 for ms, _ in app.root.pending))
-
-    def _hotkey(self, same_window=True):
-        app = types.SimpleNamespace()
-        app.root = Root()
-        app.shutdown_in_progress = False
-        app.logger = Logger()
-        captured = []
-        task = types.SimpleNamespace(
-            workspace_id="tab", task_id="task",
-            status_var=Var(""), append_external_selected_text=captured.append,
-        )
-        monitor = types.SimpleNamespace(
-            enabled=True, _capture_generation=3,
-            _clipboard_sequence_number=lambda: 50,
-            _foreground_capture_context=lambda: {"source_pid": 77 if same_window else 88,
-                                                   "source_hwnd": 123 if same_window else 321},
-            _hotkey_is_plain_ctrl_c=lambda: False,
-            _send_ctrl_c_to_active_window=lambda: emitted.append(True),
-            get_hotkey=lambda: "F8",
-        )
-        emitted = []
-        app.tab_hotkey_monitors = {"tab": monitor}
-        app._task_by_workspace_id = lambda tabid: task
-        app._on_tab_copy_hotkey = lambda tabid, info: AppHotkeysMixin._on_tab_copy_hotkey(app, tabid, info)
-        info = {
-            "clipboard_changed": False, "capture_generation": 3,
-            "clipboard_sequence_before": 50, "source_pid": 77, "source_hwnd": 123,
-            "source_process": "Telegram.exe",
-        }
-        return app, info, emitted, captured
-
-    def test_retry_f8_once_when_source_window_unchanged(self):
-        app, info, emitted, captured = self._hotkey()
-        app._on_tab_copy_hotkey("tab", info)
-        for _ in range(8):
-            if not app.root.pending: break
-            app.root.pending.pop(0)[1]()
-        self.assertEqual(len(emitted), 1, "one bounded Ctrl+C retry only")
-        self.assertEqual(captured, [])
-        self.assertEqual(sum(name == "global_copy_clipboard_timeout" for name, _ in app.logger.events), 1)
-
-    def test_no_copy_retry_when_foreground_changes(self):
-        app, info, emitted, captured = self._hotkey(same_window=False)
-        app._on_tab_copy_hotkey("tab", info)
-        for _ in range(8):
-            if not app.root.pending: break
-            app.root.pending.pop(0)[1]()
-        self.assertEqual(emitted, [])
-        self.assertEqual(captured, [])
 
     def test_deferred_capture_save_does_not_sync_disk(self):
         saves = []

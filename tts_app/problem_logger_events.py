@@ -90,6 +90,7 @@ class ProblemLoggerEventsMixin:
                     + 1
                 )
             elif event_type in {
+                "global_copy_capture_rejected",
                 "global_copy_clipboard_timeout",
                 "global_copy_clipboard_read_failed",
             }:
@@ -181,6 +182,7 @@ class ProblemLoggerEventsMixin:
                 "recovery_job_resumed",
                 "recovery_job_deferred",
                 "recovery_jobs_found",
+                "global_copy_capture_rejected",
                 "global_copy_clipboard_timeout",
                 "global_copy_clipboard_read_failed",
                 "workspace_tab_file_delete_failed",
@@ -303,6 +305,7 @@ class ProblemLoggerEventsMixin:
 
             if event_type in {
                 "global_copy_text_captured",
+                "global_copy_capture_rejected",
                 "global_copy_clipboard_timeout",
                 "global_copy_clipboard_read_failed",
                 "global_copy_duplicate_skipped",

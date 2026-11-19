@@ -4,14 +4,14 @@
 
 | Region | Lines | Что там |
 |---|---:|---|
-| `worker-bootstrap` | 26–119 | pywin32 init, counters, hashes, base context |
-| `split-output-recovery` | 120–307 | split, output dir, FFmpeg discovery, recovery manifest, disk baseline |
-| `sapi-generation` | 308–709 | chunk loop, retries, slow diagnostics, disk decisions, WAV checkpoints |
-| `ffmpeg-assembly` | 710–942 | concat/transcode, progress callback, process control |
-| `validate-success` | 943–1192 | final MP3 validation, snapshots, success events |
-| `cancellation` | 1193–1247 | InterruptedError / user cancel path |
-| `failure-recovery` | 1248–1401 | error diagnostics, recovery preservation, user message |
-| `final-cleanup` | 1402–1411 | stage reset + CoUninitialize |
+| `worker-bootstrap` | 31–129 | pywin32 init, counters, hashes, base context |
+| `split-output-recovery` | 130–342 | split, output dir, FFmpeg discovery, recovery manifest, disk baseline |
+| `sapi-generation` | 343–750 | chunk loop, confirmed WAV checkpoints, retries, diagnostics |
+| `ffmpeg-assembly` | 751–1011 | concat to a staged file, progress callback, cancellation |
+| `validate-success` | 1012–1264 | full decode and sample count, atomic publication, success events |
+| `cancellation` | 1265–1319 | InterruptedError / user cancel path |
+| `failure-recovery` | 1320–1463 | error diagnostics, recovery preservation, user message |
+| `final-cleanup` | 1464–1477 | staged-file cleanup, stage reset, CoUninitialize |
 
 Быстрый поиск:
 

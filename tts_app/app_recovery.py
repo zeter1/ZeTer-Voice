@@ -17,19 +17,6 @@ class AppRecoveryMixin:
         raw_dir = str(manifest.get("_job_dir") or "").strip()
         work_dir = Path(raw_dir) if raw_dir else None
         try:
-            output_text = str(
-                manifest.get("output_path") or ""
-            ).strip()
-            if output_text:
-                output_path = Path(output_text)
-                partial_output = output_path.with_name(
-                    output_path.stem + ".part.mp3"
-                )
-                try:
-                    partial_output.unlink(missing_ok=True)
-                except OSError:
-                    pass
-
             if (
                 work_dir is not None
                 and work_dir.exists()
@@ -173,7 +160,8 @@ class AppRecoveryMixin:
             valid_chunks, _, _, _ = (
                 count_valid_recovery_wavs(
                     work_dir,
-                    chunks_total,
+                    recovery_checkpoint_limit(manifest, chunks_total),
+                    cleanup_stale=False,
                 )
             )
 
