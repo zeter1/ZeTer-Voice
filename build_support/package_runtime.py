@@ -119,7 +119,6 @@ def run_gui_self_test() -> int:
         os.environ['TCL_LIBRARY'] = str(Path(sys._MEIPASS) / '_tcl_data')
         os.environ['TK_LIBRARY'] = str(Path(sys._MEIPASS) / '_tk_data')
     import tkinter as tk
-    import time
     from tts_app.app import TTSApp
     from tts_app import app_workspace_init
     app_workspace_init.windows_autostart_is_enabled = lambda: False
@@ -131,11 +130,10 @@ def run_gui_self_test() -> int:
         if 'ZeTer Voice' not in root.title():
             raise RuntimeError('Unexpected product title.')
         manager = app.engine_manager
-        manager.frame.master.select(manager.frame)
-        deadline = time.monotonic() + 2
-        while time.monotonic() < deadline:
-            root.update()
-            time.sleep(0.02)
+        settings_tabs = manager.frame.master
+        app.section_notebook.select(settings_tabs.master)
+        settings_tabs.select(manager.frame)
+        root.update()
         if not manager.frame.winfo_viewable() or not all(button.winfo_viewable() for button in manager.buttons):
             raise RuntimeError('Engine controls are not visible.')
         report = {'title': root.title(), 'text_tabs': len(app.tabs),
