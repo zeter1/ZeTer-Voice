@@ -1,186 +1,66 @@
-**Язык / Language:** [Русский](README.md) · **English**
-
 # ZeTer Voice
 
-**ZeTer Voice** is a Python desktop application for reading text with Windows SAPI, offline Silero, or online Microsoft Edge voices and saving text as MP3. It supports multiple tabs, global hotkeys, recovery of interrupted jobs, and long texts.
+**Язык / Language:** [Русский](README.md) · **English**
 
-The project is designed for everyday use: text can be listened to directly in the application, selected text can be captured from other programs, and audio versions of articles, notes, and documents can be created.
+ZeTer Voice reads text aloud on Windows and saves it as MP3. Paste text, open a TXT or Markdown file, or capture selected text from another app with a hotkey. Keep articles, notes, and scripts in separate tabs.
 
-## Download and run on Windows
+**[Download ZeTer Voice for Windows](https://github.com/zeter1/ZeTer-Voice/releases)** · Windows 10/11 x64 · Pre-release build
 
-> Windows builds are marked **Prerelease**: they are preliminary builds for testing. A release build may differ from the current source.
+## Create your first MP3
 
-1. Open [GitHub Releases](https://github.com/zeter1/ZeTer-Voice/releases) and expand **Assets** for the build you choose.
-2. Download `ZeTer-Voice-x64.zip` (older releases use `Text-to-MP3-Windows-x64.zip`) and extract the entire archive.
-3. Run `ZeTer-Voice.exe` (older releases use `Text-to-MP3-Windows.exe`), enter text, and select a voice.
-
-Python, `pywin32`, and FFmpeg are included. Keep the `runtime` folder beside the EXE. Windows needs at least one installed **Microsoft SAPI voice**. A SHA-256 file is published beside the ZIP.
-
-## Screenshots
+1. Open **Assets** on the **Releases** page and download `ZeTer-Voice-x64.zip`. A SHA-256 checksum is published alongside the ZIP.
+2. Extract the entire archive and run `ZeTer-Voice.exe` from the extracted folder. Keep all bundled folders beside the EXE. Python and FFmpeg are included. The interface starts in Russian. For English, open **Настройки → Общие → Язык интерфейса**, choose **English**, then click **Перезапустить программу**.
+3. Paste “This is a ZeTer Voice test recording” into a tab. In **Voice and audio**, choose an installed Windows voice that matches the text language, then click **Read** to listen.
+4. After listening, click **Create MP3**, choose a folder and file name, and open the MP3 in that folder when the job finishes.
 
 ![ZeTer Voice editor with text tabs, voice settings, and MP3 export](docs/screenshots/zeter-voice-editor-20261120.jpg)
+
+## Choose a voice
+
+| Engine | When to use it | Connection and text processing |
+| --- | --- | --- |
+| **Windows SAPI** | Get started with a voice already installed in Windows | Windows system voices process text locally |
+| **Silero** | Read Russian using one of five voices, such as Ksenia or Aidar | Internet access is required for setup. Speech synthesis then runs locally |
+| **Microsoft Edge** | Read Russian online with Svetlana or Dmitry | Internet access is required. Text is sent to Microsoft for speech synthesis |
+
+Install Silero or Microsoft Edge under **Settings → Voice engines**, then select a voice in **Voice and audio**. [Voice engine setup and text processing](docs/VOICE_ENGINES.md)
+
+## Work with text and MP3 files
+
+- **Capture from another app.** Assign F8 or another hotkey to a tab under **Text capture**. Select text in the source window and press the assigned key. If capture fails, a notification explains why. You can also copy the text manually and paste it into the target tab.
+- **Text tabs.** Keep texts in separate tabs and drag tabs by their names to reorder them. To load TXT or Markdown, choose **Open text file…** in the editor’s **⋯** menu. The app remembers tab names and order. It saves tab text by default.
+- **Listen.** Choose the voice, rate, pitch, volume, and playback device. Use **Read from cursor** to start from a chosen point. You can pause and resume playback. If you plan to export the same text, turn off automatic removal of already-read sentences.
+- **Export.** Set the bitrate, channel count, sample rate, and default MP3 folder under **Settings → General**. The export uses the text as it was when you confirmed the file name. When resuming an interrupted job, the app reuses completed, verified audio segments. If another file takes the chosen path while export is running, the app saves the new MP3 under an available name.
+
+## Settings and saved data
+
+- **Interface language.** In **Settings → General → Interface language**, choose Russian, English, Spanish, Polish, French, or Brazilian Portuguese, then click **Restart application**. Choose the reading voice separately.
+- **Backups.** In **Settings → Text and backups**, configure text saving and archive retention. Tab history and text backups for MP3 jobs are kept for 30 days by default.
+- **Diagnostics.** Use **Settings → Problem logs** to control logging and retention. To report a problem, use a short sample with invented text and see the [support guide](SUPPORT.md).
+
+Settings, tabs, and recovery data are usually stored beside the copy of the app you launched. Before moving or updating the app, check the [data locations](docs/PROJECT.md#постоянные-данные) and [update instructions](ОБНОВЛЕНИЕ_ИНСТРУКЦИЯ.txt).
+
+### Settings screenshots
 
 ![MP3 and interface settings](docs/screenshots/zeter-voice-settings-20261120.jpg)
 
 ![Installing Silero and Microsoft Edge](docs/screenshots/zeter-voice-engines-20261120.jpg)
 
-## Interface language
+## Run from source
 
-Open **Settings → General → Interface language** and choose Russian, English, Spanish, Polish, French, or Brazilian Portuguese. Use **Restart application** to apply the change. The reading voice is selected separately.
-
-## What the project demonstrates
-
-- Python integration with Microsoft SAPI and COM through `pywin32`;
-- global Windows hotkeys and transfer of selected text between applications;
-- state management for multiple independent tabs;
-- long-running MP3 generation with recovery data after interruption;
-- speech synthesis integrated with FFmpeg;
-- local user-state persistence separated from repository source files;
-- lightweight CI verification for a Windows-specific project without pretending to emulate SAPI or real audio devices.
-
-## Optional Russian voice engines
-
-**Settings → Voice engines** installs or removes Silero (five offline voices) and Microsoft Edge (Svetlana and Dmitry, online). Existing components are preserved. Removal requires confirmation and keeps a recovery copy. System SAPI voices and user data are not removed. Portable builds include a private Python for engines; model/library downloads happen only when explicitly installing. Edge sends text to Microsoft.
-
-## Features
-
-- text-to-speech through Microsoft SAPI;
-- saving text to MP3;
-- multiple independent text tabs;
-- workspace persistence across launches;
-- global hotkeys for capturing selected text;
-- pause/resume with reading-position preservation;
-- optional removal of already-read sentences;
-- voice, speed, pitch, and volume settings;
-- playback-device selection;
-- MP3 bitrate settings;
-- recovery of interrupted MP3 conversion;
-- diagnostic logs for troubleshooting;
-- optional Windows autostart.
-
-## Installation from source
-
-1. Install Python 3.13 for Windows; this is the tested runtime for the application and optional engines.
-2. Make sure at least one Microsoft SAPI voice is installed in Windows.
-3. Download the repository using **Code → Download ZIP** or Git:
-
-```bash
-git clone https://github.com/zeter1/ZeTer-Voice.git
-cd ZeTer-Voice
-```
-
-4. Create a virtual environment and install dependencies:
+You need Python 3.13 for Windows with the `py` command. Download and extract the source using **Code → Download ZIP**, or clone the repository with Git. Open PowerShell in the folder containing `ZeTer Voice.py` and run the commands below.
 
 ```powershell
-py -m venv .venv
-.\.venv\Scripts\Activate.ps1
-py -m pip install -r requirements.txt
+py -3.13 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe "ZeTer Voice.py"
 ```
 
-MP3 generation uses `imageio-ffmpeg` or FFmpeg available from the system `PATH`.
+SAPI uses voices installed in Windows. MP3 export uses FFmpeg from `PATH` or the `imageio-ffmpeg` dependency.
 
-## Launch from source
-
-```powershell
-py "ZeTer Voice.py"
-```
-
-## Usage
-
-### Reading text aloud
-
-1. Start the application.
-2. Paste or type text into a tab.
-3. Select the voice, speed, volume, and other settings.
-4. Start reading.
-5. Use pause and resume when necessary.
-
-### Capturing text from another application
-
-1. Configure a global hotkey for the required tab.
-2. Select text in a browser, document, or another application.
-3. Press the assigned hotkey.
-4. The selected text is transferred to ZeTer Voice for reading or saving.
-
-### Creating an MP3
-
-1. Prepare the text in a tab.
-2. Select the voice and synthesis settings.
-3. Configure the MP3 parameters.
-4. Start saving.
-5. For long jobs, recovery data is stored so a partially completed process does not always need to restart from zero after a failure.
-
-When capture fails, a notification shows the reason and what to try next. In **Settings → Problem logs**, you can enable or disable logging and keep logs for 1 to 120 days.
-
-## Architecture
-
-`text_to_mp3.py` is a compact entry point. Implementation modules live in `tts_app/`; see the [project overview](docs/PROJECT.md) and [code map](docs/CODEMAP.md):
-
-```text
-Tkinter UI / tabs
-    ↓
-text state + settings
-    ↓
-Microsoft SAPI / COM speech
-    ↓
-audio playback / MP3 pipeline
-    ↓
-FFmpeg
-    ↓
-recovery + backups + diagnostics
-```
-
-Separate modules own Windows hotkeys, selected-text transfer, autostart, and state persistence. Compatibility facades preserve existing imports.
-
-## Typical uses
-
-- listening to long texts instead of reading from a screen;
-- preparing audio versions of articles and notes;
-- creating MP3 files from text;
-- quickly listening to selected text from another application;
-- working with several texts at once.
-
-## Main dependencies
-
-- `pywin32` — Microsoft SAPI, COM, and Windows integration;
-- `imageio-ffmpeg` — fallback FFmpeg provider.
-
-Most other logic uses the Python standard library.
-
-## Data and recovery
-
-The application can store settings, tab state, recovery data, text backups for long MP3 conversions, and diagnostic logs next to the application. Runtime data is excluded from Git through `.gitignore`.
-
-## Project verification
-
-```powershell
-python -m unittest discover -s tests -v
-python tools/verify.py
-```
-
-Run the local `tools/verify.py` in a source-only mirror without user data; see the [isolation contract](docs/LOGGING_FOR_AI.md). GitHub Actions checks repository contracts, imports, preview/hotkey regressions, and logging in a clean checkout. Commits marked `[package]` also build Windows binaries and run the packaged SAPI/FFmpeg self-test.
-
-## Limitations and verification level
-
-- the application is intended for Windows 10/11 only;
-- real SAPI, COM, global-hotkey, and audio-device behavior requires Windows runtime verification;
-- the MP3 pipeline depends on an available FFmpeg binary;
-- voice quality and available voices depend on installed SAPI voices;
-- CI does not claim full verification of hardware- and Windows-dependent scenarios.
-
-## Platform
-
-The application targets Windows 10/11 because it uses Microsoft SAPI, COM, Win32 APIs, and Windows system functionality.
-
-## Version
-
-Current source version: **4.2.2 FULL**. See [CHANGELOG.md](CHANGELOG.md); Windows builds are identified by a `build-<commit>` tag.
-
-## Documentation and support
-
-- [Security / privacy](SECURITY.md)
-- [Support and diagnostics](SUPPORT.md)
-- the bug-report form is under `.github/ISSUE_TEMPLATE/bug_report.yml`.
+- [Project overview](docs/PROJECT.md) and [code map](docs/CODEMAP.md)
+- [Build the EXE](BUILD_EXE.md) and [run checks in an isolated copy](docs/VERIFICATION.md)
+- [Changelog](CHANGELOG.md), [support](SUPPORT.md), and [security and privacy](SECURITY.md)
 
 ## License
 
@@ -201,3 +81,4 @@ No open-source license is currently granted. The source code is published for po
 - [https://www.threads.com/@zeter1992](https://www.threads.com/@zeter1992)
 - [https://ok.ru/zeter1](https://ok.ru/zeter1)
 - [https://t.me/zeterchat](https://t.me/zeterchat) — Telegram group: about me, projects and chat
+- [https://dkoles.com/](https://dkoles.com/) - project website.
