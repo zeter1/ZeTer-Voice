@@ -1,14 +1,12 @@
 """Additive engine management. Standalone imports; never reads application state."""
 from pathlib import Path
 import importlib.util
-import os
-import shutil
 import subprocess
 import sys
 import tempfile
 import urllib.request
 import uuid
-from .voice_catalog import MODEL_PATH, MODEL_URL, MODEL_BYTES, EDGE_RUNTIME, verified_model
+from .voice_catalog import MODEL_PATH, MODEL_URL, MODEL_BYTES, EDGE_RUNTIME, model_available, torch_available, verified_model
 
 ENGINE_ROOT = MODEL_PATH.parent
 OPTIONAL = ENGINE_ROOT / 'optional_dependencies'
@@ -30,12 +28,9 @@ def engine_status(engine: str) -> str:
     if not target.exists():
         return 'Не установлен'
     if engine == 'silero':
-        try:
-            with verified_model(target):
-                pass
-        except (RuntimeError, OSError):
+        if not model_available(target):
             return 'Файл требует проверки; автоматически не заменяется'
-        if importlib.util.find_spec('torch') is None and not (OPTIONAL / 'torch').is_dir():
+        if not torch_available(OPTIONAL):
             return 'Модель установлена; нет библиотеки PyTorch'
     elif not (target / 'edge_tts' / '__init__.py').is_file():
         return 'Папка существует; автоматически не заменяется'
@@ -61,18 +56,34 @@ def remove_engine(engine: str) -> str:
 
 def install_engine(engine: str) -> str:
     target = engine_path(engine)
-    if target.exists():
+    existing_model = engine == 'silero' and target.exists()
+    torch_installed = False
+    if engine == 'silero':
+        if existing_model:
+            try:
+                with verified_model(target):
+                    pass
+            except (RuntimeError, OSError):
+                return 'Файл модели требует проверки; оставлен без изменений'
+        # This installer already runs under the same interpreter and environment as the worker.
+        torch_installed = (importlib.util.find_spec('torch') is not None
+                           or (OPTIONAL / 'torch' / '__init__.py').is_file())
+    if (existing_model and torch_installed) or (engine == 'edge' and target.exists()):
         return 'Уже существует — оставлен без изменений'
     ENGINE_ROOT.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='install_', dir=ENGINE_ROOT) as temporary:
         stage = Path(temporary)
         if engine == 'silero':
-            if importlib.util.find_spec('torch') is None and not (OPTIONAL / 'torch').is_dir():
+            if not torch_installed:
                 if OPTIONAL.exists():
                     raise RuntimeError('Папка библиотек уже существует; оставлена без изменений.')
                 deps = stage / 'dependencies'
                 pip_install(['torch==2.8.0', '--index-url', 'https://download.pytorch.org/whl/cpu'], deps)
+                if not (deps / 'torch' / '__init__.py').is_file():
+                    raise RuntimeError('Установка PyTorch не завершена.')
                 deps.rename(OPTIONAL)
+            if existing_model:
+                return 'PyTorch установлен. Существующая модель Silero сохранена.'
             candidate = stage / 'model.pt'
             with urllib.request.urlopen(MODEL_URL, timeout=30) as response, candidate.open('xb') as output:
                 if response.geturl() != MODEL_URL:

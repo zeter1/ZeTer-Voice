@@ -6,6 +6,11 @@ from .text_processing import *
 from .sapi import *
 from .ffmpeg_tools import *
 from .windows_tools import *
+from .voice_catalog import voice_spec
+
+VOICES_LOADING_STATUS = "Ищу голоса Windows SAPI, Silero и Edge…"
+VOICES_UNAVAILABLE_STATUS = "Нет доступных голосов. Откройте настройки голосовых движков."
+
 
 class TaskUiStateMixin:
     def _settings_changed(self, *_args) -> None:
@@ -14,33 +19,33 @@ class TaskUiStateMixin:
 
     def apply_voice_list(self, voices: list[str]) -> None:
         self.voice_combo["values"] = voices
+        if not voices:
+            self.voice_var.set("")
+            self.status_var.set(VOICES_UNAVAILABLE_STATUS)
+            return
+        if self.status_var.get() in (VOICES_LOADING_STATUS, VOICES_UNAVAILABLE_STATUS):
+            self.status_var.set("Готово к работе.")
 
         current = self.voice_var.get().strip()
         for voice in voices:
             if current and voice.casefold() == current.casefold():
                 self.voice_var.set(voice)
-                self.status_var.set(f"Голос выбран: {voice}")
                 return
 
+        # An unavailable local voice must never cause text to go to Edge.
+        local_voices = [voice for voice in voices if (voice_spec(voice) or ("sapi",))[0] != "edge"]
         preferred = str(self.app.settings.get("voice") or "").strip()
-        for voice in voices:
+        for voice in local_voices:
             if preferred and voice.casefold() == preferred.casefold():
                 self.voice_var.set(voice)
-                self.status_var.set(f"Голос выбран: {voice}")
                 return
 
-        for voice in voices:
+        for voice in local_voices:
             if DEFAULT_VOICE_HINT.casefold() in voice.casefold():
                 self.voice_var.set(voice)
-                self.status_var.set(f"Голос выбран: {voice}")
                 return
 
-        if voices:
-            self.voice_var.set(voices[0])
-            self.status_var.set(f"Голос выбран: {voices[0]}")
-        else:
-            self.voice_var.set("")
-            self.status_var.set("SAPI-голоса не найдены.")
+        self.voice_var.set(local_voices[0] if local_voices else "")
 
     def tab_title(self) -> str:
         try:
@@ -86,7 +91,6 @@ class TaskUiStateMixin:
             "audio_output": self.app.global_audio_output_var.get().strip()
             or DEFAULT_AUDIO_OUTPUT_LABEL,
             "volume": clamp_int(self.volume_var.get(), 0, 100, 100),
-            "bitrate": self.bitrate_var.get().strip() or "96k",
             "delete_read_text": bool(self.delete_read_text_var.get()),
             "auto_read_hotkey_text": bool(
                 self.auto_read_hotkey_var.get()

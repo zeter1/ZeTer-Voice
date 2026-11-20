@@ -23,47 +23,8 @@ class AppEventDispatchMixin:
                 task_id, kind, payload = self.events.get_nowait()
                 processed += 1
 
-                if kind == "voices_loaded":
-                    self.voices = list(payload)  # type: ignore[arg-type]
-
-                    voices_blob = "\n".join(self.voices)
-                    current_tab = self.current_tab()
-                    self.logger.event(
-                        "voices_loaded",
-                        count=len(self.voices),
-                        voices_hash=hashlib.sha256(
-                            voices_blob.encode("utf-8")
-                        ).hexdigest()[:16],
-                        selected_voice=(
-                            current_tab.voice_var.get().strip()
-                            if current_tab
-                            else self.settings.get("voice", "")
-                        ),
-                    )
-
-                    for task in list(self.tabs.values()):
-                        task.apply_voice_list(self.voices)
-
-                    continue
-
-                if kind == "voices_error":
-                    info = payload  # type: ignore[assignment]
-                    exc = info["exc"]
-
-                    self.logger.error(
-                        task_id="app",
-                        stage="load_sapi_voices",
-                        exc=exc,
-                        traceback_text=info["traceback"],
-                        context={},
-                    )
-
-                    if not self.shutdown_in_progress:
-                        messagebox.showerror(
-                            APP_TITLE,
-                            "Не удалось получить список SAPI-голосов.\n\n"
-                            f"{exc}",
-                        )
+                if kind in ("voices_loaded", "voices_error", "optional_voices_error"):
+                    self._dispatch_voice_discovery(task_id, kind, payload)
                     continue
 
                 if kind == "audio_outputs_loaded":
@@ -297,10 +258,10 @@ class AppEventDispatchMixin:
                             "границы. Новый текст также сохранён."
                         )
 
-                    if not self.shutdown_in_progress:
+                    if not self.shutdown_in_progress and not self.settings.get("quiet_mp3_notifications"):
                         if not hasattr(self, "completion_notifications"):
                             self.completion_notifications = ConversionNotifications(self.root)
-                        backup_note = "\nБэкап текста хранится 45 дней." if backup_path else ""
+                        backup_note = "\nРезервная копия текста сохранена." if backup_path else ""
                         self.completion_notifications.show(
                             Path(info["output"]), text_note.strip() + backup_note,
                         )

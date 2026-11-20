@@ -9,21 +9,36 @@ from .windows_tools import *
 from .ui_stall_diagnostics import ui_operation
 
 class TaskFileIoMixin:
+    def _can_load_file(self) -> bool:
+        if self.app.shutdown_in_progress or self.app.tabs.get(self.task_id) is not self:
+            return False
+        if self.current_preview_run_id or self.current_run_id:
+            messagebox.showwarning(
+                APP_TITLE,
+                "Сначала остановите чтение или создание MP3 в этой вкладке.",
+                parent=self.frame.winfo_toplevel(),
+            )
+            return False
+        return True
+
     def load_file(self) -> None:
+        if not self._can_load_file():
+            return
         kwargs = {}
         last_dir = self.app.settings.get("last_input_dir")
         if last_dir and Path(last_dir).is_dir():
             kwargs["initialdir"] = last_dir
 
         path = filedialog.askopenfilename(
+            parent=self.frame.winfo_toplevel(),
             title="Выберите текстовый файл",
             filetypes=[
-                ("Текстовые файлы", "*.txt *.md"),
+                ("Текстовые файлы", ("*.txt", "*.md")),
                 ("Все файлы", "*.*"),
             ],
             **kwargs,
         )
-        if not path:
+        if not path or not self._can_load_file():
             return
 
         src = Path(path)
@@ -43,6 +58,8 @@ class TaskFileIoMixin:
             )
             return
 
+        if not self.app._archive_tab_before_overwrite(self, "load_file"):
+            return
         self.clear_saved_preview_bookmark(
             reason="load_new_text",
             schedule_save=False,
@@ -52,6 +69,7 @@ class TaskFileIoMixin:
             self.text_box.delete("1.0", "end")
             self.text_box.insert("1.0", text)
         self.text_box.edit_modified(False)
+        self._text_metrics_cache = None
         self.workspace_dirty = True
         self.schedule_queue_status_refresh()
 
@@ -74,6 +92,8 @@ class TaskFileIoMixin:
             )
             return
 
+        if not self.app._archive_tab_before_overwrite(self, "clear_text"):
+            return
         self.stop_preview(
             preserve_bookmark=False,
             reason="clear_text",

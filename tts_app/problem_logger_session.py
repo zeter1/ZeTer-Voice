@@ -73,6 +73,7 @@ class ProblemLoggerSessionMixin:
             "global_copy_captures": 0,
             "global_copy_captured_chars": 0,
             "global_copy_failures": 0,
+            "text_paste_failures": 0,
             "global_copy_duplicates_skipped": 0,
             "global_copy_latency_ms_sum": 0.0,
             "global_copy_latency_ms_max": 0.0,

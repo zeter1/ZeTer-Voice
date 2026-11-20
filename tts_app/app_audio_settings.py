@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .voice_catalog import extra_voice_names
+from .voice_catalog import available_extra_voice_names
 
 from .runtime import *
 from .problem_logger import ProblemLogger
@@ -10,39 +10,59 @@ from .ffmpeg_tools import *
 from .windows_tools import *
 from .widgets import ClosableNotebook
 from .task_tab import TaskTab
+from .task_ui_state import VOICES_LOADING_STATUS
 
 class AppAudioSettingsMixin:
     def _load_voices_async(self) -> None:
+        self._voice_load_generation = getattr(self, "_voice_load_generation", 0) + 1
+        generation = str(self._voice_load_generation)
         current = self.current_tab()
         if current:
-            current.status_var.set(
-                    "Ищу голоса Windows SAPI, Silero и Edge…"
-            )
+            current.status_var.set(VOICES_LOADING_STATUS)
 
         def worker() -> None:
+            voices = []
+            failures = []
             try:
-                voices = get_sapi_voices() + extra_voice_names()
-                self.events.put(
-                    ("", "voices_loaded", voices)
-                )
+                voices.extend(get_sapi_voices())
             except Exception as exc:
-                self.events.put(("", "voices_loaded", extra_voice_names()))
-                self.events.put(
-                    (
-                        "",
-                        "voices_error",
-                        {
-                            "exc": exc,
-                            "traceback": traceback.format_exc(),
-                        },
-                    )
-                )
+                failures.append(("voices_error", {"exc": exc, "traceback": traceback.format_exc()}))
+            try:
+                voices.extend(available_extra_voice_names())
+            except Exception as exc:
+                failures.append(("optional_voices_error", {"exc": exc, "traceback": traceback.format_exc()}))
+            self.events.put((generation, "voices_loaded", voices))
+            for kind, error in failures:
+                self.events.put((generation, kind, error))
 
         threading.Thread(
             target=worker,
             name="voice-discovery",
             daemon=True,
         ).start()
+
+    def _dispatch_voice_discovery(self, generation: str, kind: str, payload) -> None:
+        if generation != str(self._voice_load_generation):
+            return
+        if kind == "voices_loaded":
+            self.voices = list(payload)
+            current = self.current_tab()
+            self.logger.event(
+                "voices_loaded", count=len(self.voices),
+                voices_hash=hashlib.sha256("\n".join(self.voices).encode("utf-8")).hexdigest()[:16],
+                selected_voice=current.voice_var.get().strip() if current else self.settings.get("voice", ""),
+            )
+            for task in self.tabs.values():
+                task.apply_voice_list(self.voices)
+            return
+
+        exc = payload["exc"]
+        self.logger.error(
+            task_id="app", stage="load_sapi_voices" if kind == "voices_error" else "load_optional_voices",
+            exc=exc, traceback_text=payload["traceback"], context={},
+        )
+        if kind == "voices_error" and not self.shutdown_in_progress:
+            messagebox.showerror(APP_TITLE, f"Не удалось получить список SAPI-голосов.\n\n{exc}")
 
     def _load_audio_outputs_async(self) -> None:
         # Only one SAPI enumeration worker at a time. Bluetooth reconnection
@@ -229,8 +249,8 @@ class AppAudioSettingsMixin:
 
         self.settings["rate"] = rate
 
-        # All sliders already share global_rate_var. Only the small numeric
-        # label belongs to each tab, so update those labels explicitly.
+        # The sliders have local display variables. Keep all of them in sync
+        # with the single whole-application integer setting.
         for task in list(self.tabs.values()):
             task.rate_value_var.set(str(rate))
 
@@ -270,8 +290,7 @@ class AppAudioSettingsMixin:
 
         self.settings["pitch"] = pitch
 
-        # Each tab owns only the little numeric label; all scales themselves
-        # already share self.global_pitch_var.
+        # The sliders have local display variables and a shared integer setting.
         for task in list(self.tabs.values()):
             task.pitch_value_var.set(str(pitch))
 
@@ -332,10 +351,6 @@ class AppAudioSettingsMixin:
                 100,
                 100,
             )
-            self.settings["bitrate"] = (
-                source_tab.bitrate_var.get().strip()
-                or "96k"
-            )
 
         if self.settings_after_id:
             try:
@@ -350,7 +365,9 @@ class AppAudioSettingsMixin:
             self.save_settings,
         )
 
-    def save_settings(self) -> None:
+    def save_settings(self) -> bool:
+        if self.settings_after_id is not None:
+            self.root.after_cancel(self.settings_after_id)
         self.settings_after_id = None
 
         try:
@@ -372,6 +389,17 @@ class AppAudioSettingsMixin:
                 "settings_save_failed",
                 error=f"{type(exc).__name__}: {exc}",
             )
+            if not self.shutdown_in_progress and not getattr(self, "_settings_save_failure_reported", False):
+                self._settings_save_failure_reported = True
+                messagebox.showerror(
+                    APP_TITLE,
+                    "Не удалось записать настройки. Проверьте доступ к папке настроек. "
+                    "Программа попробует сохранить их при следующем изменении или закрытии.",
+                    parent=self.root,
+                )
+            return False
+        self._settings_save_failure_reported = False
+        return True
 
     def log_ui_error(
         self,

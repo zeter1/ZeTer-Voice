@@ -43,6 +43,12 @@ class TaskPreviewStateMixin:
         self.preview_bookmark = None
         self.preview_keep_bookmark_after_stop = False
         if had_bookmark:
+            running = self.preview_thread and self.preview_thread.is_alive()
+            if self.preview_is_paused and not running:
+                self.preview_is_paused = False
+                self.current_preview_segment_text = ""
+                self.clear_preview_highlight()
+                self._set_playback_controls("idle")
             self.app.logger.event(
                 "preview_bookmark_cleared",
                 task_id=self.task_id,
@@ -134,11 +140,7 @@ class TaskPreviewStateMixin:
             pass
 
         self.preview_is_paused = True
-        self.pause_preview_button.configure(state="disabled")
-        self.resume_preview_button.configure(state="normal")
-        self.stop_preview_button.configure(state="normal")
-        self.preview_button.configure(state="normal")
-        self.preview_cursor_button.configure(state="normal")
+        self._set_playback_controls("saved")
 
         offset = int(self.preview_bookmark.get("char_offset") or 0)
         total = max(1, len(self._full_text()))

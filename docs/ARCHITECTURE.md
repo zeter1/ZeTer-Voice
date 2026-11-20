@@ -4,7 +4,7 @@
 
 ## Слои
 
-`text_to_mp3.py` — стабильная точка запуска и legacy facade.
+`ZeTer Voice.py` — стабильная точка запуска и legacy facade.
 
 `runtime.py`, `sapi.py`, `windows_tools.py`, `problem_logger.py` — компактные compatibility facades. Реальная логика вынесена в owner-модули (`runtime_*`, `sapi_*`, `windows_*`, `problem_logger_*`). Старые импорты сохранены.
 
@@ -18,7 +18,7 @@
 
 Public composition names (`ProblemLogger`, `GlobalCopyHotkeyMonitor`, `TaskUiMixin`, `TaskSourcesMixin`, `TaskPreviewRuntimeMixin`, `AppEventsMixin`, `AppWorkspaceMixin`, `AppRecoveryHotkeysMixin`) сохранены. Cross-mixin вызовы через `self` продолжают работать через MRO.
 
-Пути пользовательских данных по-прежнему находятся рядом с корнем программы (либо fallback storage), а не внутри `tts_app/`. Windows autostart по-прежнему указывает на корневой `text_to_mp3.py`.
+Пути пользовательских данных по-прежнему находятся рядом с корнем программы (либо fallback storage), а не внутри `tts_app/`. Автозапуск Windows использует `ZeTer Voice.py` для исходного кода и путь к EXE для сборки.
 
 ## AI navigation contract
 

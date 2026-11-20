@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import stat
+from .mp3_format import read_mp3_format
+
 from .runtime_core import *
 from .runtime_core import _ATOMIC_WRITE_LOCK
 
@@ -41,9 +44,47 @@ def resolve_storage_dirs() -> tuple[Path, Path, Path]:
 STORAGE_BASE_DIR, SETTINGS_DIR, LOGS_DIR = resolve_storage_dirs()
 SETTINGS_FILE = SETTINGS_DIR / SETTINGS_FILE_NAME
 WORKSPACE_FILE = SETTINGS_DIR / WORKSPACE_FILE_NAME
-WORKSPACE_TEXT_DIR = SETTINGS_DIR / WORKSPACE_TEXT_DIR_NAME
-RECOVERY_DIR = STORAGE_BASE_DIR / RECOVERY_DIR_NAME
-MP3_TEXT_BACKUPS_DIR = STORAGE_BASE_DIR / MP3_TEXT_BACKUPS_DIR_NAME
+WORKSPACE_RECOVERY_FILE = SETTINGS_DIR / "workspace.recovery.json"
+TEXT_STORAGE_DIR = STORAGE_BASE_DIR / TEXT_STORAGE_DIR_NAME
+WORKSPACE_TEXT_DIR = TEXT_STORAGE_DIR / WORKSPACE_TEXT_DIR_NAME
+WORKSPACE_TEXT_HISTORY_DIR = TEXT_STORAGE_DIR / WORKSPACE_TEXT_HISTORY_DIR_NAME
+RECOVERY_DIR = TEXT_STORAGE_DIR / RECOVERY_DIR_NAME
+MP3_TEXT_BACKUPS_DIR = TEXT_STORAGE_DIR / MP3_TEXT_BACKUPS_DIR_NAME
+
+
+def _text_storage_directory_exists(path: Path) -> bool:
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return False
+    if (not stat.S_ISDIR(info.st_mode)
+            or getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
+        raise OSError(f"Небезопасный путь к папке текста: {path.name}")
+    return True
+
+
+def migrate_text_storage() -> int:
+    """Move known legacy directories on the same volume without merging files."""
+    _text_storage_directory_exists(SETTINGS_DIR)
+    if not _text_storage_directory_exists(TEXT_STORAGE_DIR):
+        TEXT_STORAGE_DIR.mkdir()
+    pairs = (
+        (SETTINGS_DIR / WORKSPACE_TEXT_DIR_NAME, WORKSPACE_TEXT_DIR),
+        (STORAGE_BASE_DIR / MP3_TEXT_BACKUPS_DIR_NAME, MP3_TEXT_BACKUPS_DIR),
+        (STORAGE_BASE_DIR / RECOVERY_DIR_NAME, RECOVERY_DIR),
+    )
+    planned = []
+    for source, target in pairs:
+        target_present = _text_storage_directory_exists(target)
+        if _text_storage_directory_exists(source):
+            if target_present:
+                raise FileExistsError(f"Найдены старая и новая папки: {target.name}")
+            planned.append((source, target))
+    moved = 0
+    for source, target in planned:
+        source.rename(target)
+        moved += 1
+    return moved
 
 
 def read_workspace_manifest(path: Path) -> dict:
@@ -55,6 +96,11 @@ def read_workspace_manifest(path: Path) -> dict:
     return payload
 
 
+def merge_workspace_tabs(first: list[dict], second: list[dict]) -> list[dict]:
+    existing = {str(tab["workspace_id"]) for tab in first if tab.get("workspace_id")}
+    return first + [tab for tab in second if str(tab.get("workspace_id")) not in existing]
+
+
 DEFAULT_SETTINGS = {
     "schema": 1,
     "voice": DEFAULT_VOICE_HINT,
@@ -63,6 +109,15 @@ DEFAULT_SETTINGS = {
     "audio_output": DEFAULT_AUDIO_OUTPUT_LABEL,
     "volume": 100,
     "bitrate": "96k",
+    "mp3_channels": 0,
+    "mp3_sample_rate_hz": 44100,
+    "mp3_output_dir": "",
+    "quiet_mp3_notifications": False,
+    "editor_font_size": EDITOR_FONT_DEFAULT,
+    "highlight_current_sentence": True,
+    "save_workspace_text": True,
+    "archive_text_versions": True,
+    "text_backup_retention_days": MP3_TEXT_BACKUP_RETENTION_DAYS,
     "window_geometry": "1200x820",
     "last_input_dir": "",
     "last_output_dir": "",
@@ -95,10 +150,18 @@ def normalize_settings(raw: dict | None) -> dict:
     )
     result["volume"] = clamp_int(result.get("volume"), 0, 100, 100)
 
-    bitrate = str(result.get("bitrate") or "96k")
-    if bitrate not in {"64k", "96k", "128k", "160k", "192k"}:
-        bitrate = "96k"
-    result["bitrate"] = bitrate
+    result["bitrate"], result["mp3_channels"], result["mp3_sample_rate_hz"] = read_mp3_format(result)
+    if not isinstance(result["mp3_output_dir"], str):
+        result["mp3_output_dir"] = ""
+    result["editor_font_size"] = clamp_int(
+        result["editor_font_size"], EDITOR_FONT_MIN, EDITOR_FONT_MAX, EDITOR_FONT_DEFAULT,
+    )
+    for key in ("quiet_mp3_notifications", "highlight_current_sentence", "save_workspace_text", "archive_text_versions"):
+        if not isinstance(result[key], bool):
+            result[key] = DEFAULT_SETTINGS[key]
+    days = result["text_backup_retention_days"]
+    if type(days) is not int or not 1 <= days <= TEXT_BACKUP_RETENTION_MAX_DAYS:
+        result["text_backup_retention_days"] = MP3_TEXT_BACKUP_RETENTION_DAYS
 
     result["window_geometry"] = str(result.get("window_geometry") or "1200x820")
     result["last_input_dir"] = str(result.get("last_input_dir") or "")
@@ -182,12 +245,15 @@ def atomic_write_json(path: Path, data: dict) -> int:
     return atomic_write_text(path, payload)
 
 
-def cleanup_old_mp3_text_backups() -> tuple[int, int]:
+def cleanup_old_mp3_text_backups(
+    retention_days: int = MP3_TEXT_BACKUP_RETENTION_DAYS, *, protected_paths: frozenset[Path] = frozenset(),
+) -> tuple[int, int]:
     """Delete only app-owned MP3 text backups older than the retention limit."""
-    MP3_TEXT_BACKUPS_DIR.mkdir(parents=True, exist_ok=True)
+    if not _text_storage_directory_exists(TEXT_STORAGE_DIR) or not _text_storage_directory_exists(MP3_TEXT_BACKUPS_DIR):
+        return 0, 0
     cutoff_timestamp = (
         time.time()
-        - MP3_TEXT_BACKUP_RETENTION_DAYS * 24 * 60 * 60
+        - retention_days * 24 * 60 * 60
     )
     removed = 0
     failed = 0
@@ -195,10 +261,21 @@ def cleanup_old_mp3_text_backups() -> tuple[int, int]:
     for path in MP3_TEXT_BACKUPS_DIR.glob(
         "mp3_text_*.txt"
     ):
+        if path in protected_paths:
+            continue
+        match = re.fullmatch(r"mp3_text_(\d{8}_\d{6}_\d{6})_[A-Za-z0-9_-]+_.+\.txt", path.name)
+        if match is None:
+            continue
         try:
+            datetime.strptime(match[1], "%Y%m%d_%H%M%S_%f")
+        except ValueError:
+            continue
+        try:
+            info = path.lstat()
             if (
-                path.is_file()
-                and path.stat().st_mtime < cutoff_timestamp
+                stat.S_ISREG(info.st_mode)
+                and not getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+                and info.st_mtime <= cutoff_timestamp
             ):
                 path.unlink()
                 removed += 1
@@ -214,9 +291,6 @@ def create_mp3_text_backup(
     raw_text: str,
 ) -> Path:
     """Persist the exact raw text snapshot before its MP3 task starts."""
-    # Repeat retention cleanup for long-running app sessions as well as at
-    # startup, so a program left open for months still observes the limit.
-    cleanup_old_mp3_text_backups()
     safe_title = re.sub(
         r'[<>:"/\\|?*]+',
         "_",
@@ -242,15 +316,14 @@ def create_mp3_text_backup(
 
 
 def load_settings() -> dict:
-    if not SETTINGS_FILE.exists():
-        return dict(DEFAULT_SETTINGS)
-
     try:
-        return normalize_settings(
-            json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
-        )
-    except Exception:
+        text = SETTINGS_FILE.read_text(encoding="utf-8")
+    except FileNotFoundError:
         return dict(DEFAULT_SETTINGS)
+    payload = json.loads(text)
+    if not isinstance(payload, dict):
+        raise ValueError("Файл настроек должен содержать объект JSON.")
+    return normalize_settings(payload)
 
 
 def ensure_help_files() -> None:
@@ -267,7 +340,9 @@ def ensure_help_files() -> None:
         "качество MP3, размер окна и последние рабочие папки.\n"
         f"{WORKSPACE_FILE_NAME} — список открытых вкладок, их имена, параметры "
         "и сохранённая позиция прослушивания каждой вкладки.\n"
-        f"{WORKSPACE_TEXT_DIR_NAME}\\*.txt — текст каждой вкладки.\n\n"
+        f"Текст вкладок хранится рядом с программой в «{TEXT_STORAGE_DIR_NAME}\\{WORKSPACE_TEXT_DIR_NAME}».\n"
+        f"Предыдущие версии хранятся в «{TEXT_STORAGE_DIR_NAME}\\{WORKSPACE_TEXT_HISTORY_DIR_NAME}» "
+        "в файлах .txt.gz. Срок хранения можно настроить в программе.\n\n"
         f"Скорость едина для всех вкладок: {RATE_MIN}..{RATE_MAX}. "
         f"Pitch един для всех вкладок: {PITCH_MIN}..{PITCH_MAX}.\n"
         "Во время чтения кнопка «Вставить текст» добавляет текст в самый низ "
@@ -318,7 +393,7 @@ def ensure_help_files() -> None:
         "Эта папка хранит точные UTF-8 копии текста, отправленного на создание "
         "MP3. Новый файл mp3_text_*.txt создаётся перед запуском каждой "
         "конвертации.\n"
-        f"Бэкапы хранятся {MP3_TEXT_BACKUP_RETENTION_DAYS} дней. Программа "
+        "Срок хранения бэкапов задаётся в настройках. Программа "
         "автоматически удаляет только собственные файлы mp3_text_*.txt старше "
         "этого срока; README.txt и другие файлы не удаляются.\n",
         encoding="utf-8",
@@ -340,7 +415,7 @@ def ensure_help_files() -> None:
         "- при длинной сессии routine events имеют мягкий лимит, но ошибки/final status не отбрасываются;\n"
         "- одинаковая ошибка группируется по fingerprint в одном errors/*.json с occurrences;\n"
         "- traceback и context ограничиваются по размеру; очевидные secrets редактируются;\n"
-        "- весь исходный большой текст не пишется; failed_chunk сохраняется только bounded-фрагментом.\n\n"
+        "- добавление текста описывается этапами, размерами и результатом. Исходный текст и фрагменты синтеза не прикладываются.\n\n"
         "ID: tab_id = вкладка, run_id = создание MP3, preview_run_id = прослушивание.\n"
         f"Сессии хранятся не более {LOG_RETENTION_DAYS} дней и максимум {LOG_MAX_SESSIONS} папок. "
         f"Routine events ограничены примерно {EVENTS_SESSION_SOFT_LIMIT_BYTES // 1024} КБ на сессию.\n",

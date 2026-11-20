@@ -36,7 +36,7 @@ class CompletionDispatchTests(unittest.TestCase):
         app = types.SimpleNamespace(
             events=queue.Queue(), tabs={1: task},
             root=types.SimpleNamespace(after=Mock()),
-            completion_notifications=Mock(), shutdown_in_progress=False,
+            completion_notifications=Mock(), shutdown_in_progress=False, settings={},
             _process_events=Mock(),
         )
         app.events.put((1, "done", {"output": str(output), "run_id": "run-1"}))
@@ -48,6 +48,25 @@ class CompletionDispatchTests(unittest.TestCase):
         task.remove_completed_mp3_source.assert_called_once_with("run-1")
         task.set_job_idle.assert_called_once()
 
+    def test_quiet_completion_keeps_status_and_source_handling_without_a_popup(self):
+        output = ROOT / "готово.mp3"
+        task = types.SimpleNamespace(
+            current_mp3_text_backup_path=None,
+            remove_completed_mp3_source=Mock(return_value={"removed": True}),
+            set_job_idle=Mock(), status_var=Mock(),
+        )
+        app = types.SimpleNamespace(
+            events=queue.Queue(), tabs={1: task}, root=types.SimpleNamespace(after=Mock()),
+            completion_notifications=Mock(), shutdown_in_progress=False,
+            settings={"quiet_mp3_notifications": True}, _process_events=Mock(),
+        )
+        app.events.put((1, "done", {"output": str(output), "run_id": "quiet-1"}))
+        AppEventDispatchMixin._process_events(app)
+        app.completion_notifications.show.assert_not_called()
+        self.assertIn(str(output), task.status_var.set.call_args.args[0])
+        task.remove_completed_mp3_source.assert_called_once_with("quiet-1")
+        task.set_job_idle.assert_called_once()
+
     def test_shutting_down_does_not_create_a_new_window(self):
         task = types.SimpleNamespace(
             current_mp3_text_backup_path=None,
@@ -57,7 +76,7 @@ class CompletionDispatchTests(unittest.TestCase):
         app = types.SimpleNamespace(
             events=queue.Queue(), tabs={1: task},
             root=types.SimpleNamespace(after=Mock()),
-            completion_notifications=Mock(), shutdown_in_progress=True,
+            completion_notifications=Mock(), shutdown_in_progress=True, settings={},
             _process_events=Mock(),
         )
         app.events.put((1, "done", {"output": str(ROOT / "done.mp3"), "run_id": "run-1"}))
@@ -210,7 +229,7 @@ class NotificationTkTests(unittest.TestCase):
             )
         app = types.SimpleNamespace(
             root=self.root, events=queue.Queue(), tabs={1: task(), 2: task()},
-            shutdown_in_progress=False, _process_events=Mock(),
+            shutdown_in_progress=False, settings={}, _process_events=Mock(),
         )
         for index in (1, 2):
             app.events.put((index, "done", {"output": str(ROOT / f"Задача {index}.mp3"), "run_id": f"run-{index}"}))

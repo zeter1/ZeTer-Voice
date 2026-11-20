@@ -217,6 +217,11 @@ class AppTabsMixin:
             )
             return
 
+        if not self._archive_tab_before_overwrite(task, "close_tab"):
+            return
+        if not self.save_workspace(closing_task=task):
+            messagebox.showerror(APP_TITLE, "Не удалось сохранить вкладки. Вкладка оставлена открытой.", parent=self.root)
+            return
         task.stop_preview()
         self._stop_tab_hotkey_monitor(
             task.workspace_id
@@ -243,7 +248,7 @@ class AppTabsMixin:
             self.new_tab(save_workspace=False)
 
         self.renumber_default_tabs()
-        if self.save_workspace():
+        if self.workspace_text_enabled and not getattr(self, "_workspace_manifest_needs_read", False):
             try:
                 text_path.unlink(missing_ok=True)
             except OSError as exc:

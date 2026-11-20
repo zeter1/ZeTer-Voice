@@ -116,6 +116,21 @@ def main() -> int:
             raise AssertionError("preview boundary evidence suppressed after soft budget")
         critical.close()
 
+        text_log = ProblemLogger()
+        text_log.event(
+            "global_copy_capture_rejected", capture_protocol=2, capture_id=7,
+            reason="clipboard_timeout", capture_stage="clipboard_open_busy", source_process="fixture.exe",
+            clipboard_notified=True, send_input_accepted=True, read_attempts=3,
+        )
+        text_log.event("text_paste_rejected", source="paste_button", stage="clipboard_read",
+                       reason="clipboard_unavailable")
+        text_log.close()
+        text_summary = json.loads((text_log.session_dir / "AI_READ_FIRST.json").read_text(encoding="utf-8"))
+        signal = next(record for record in text_summary["recent_signals"] if record.get("capture_id") == 7)
+        assert signal["capture_stage"] == "clipboard_open_busy" and signal["read_attempts"] == 3
+        assert signal["send_input_accepted"] is True and signal["source_process"] == "fixture.exe"
+        assert text_summary["key_stats"]["text_paste_failures"] == 1
+
         preview_log = ProblemLogger()
         endpoint_voice = types.SimpleNamespace(AudioOutput=types.SimpleNamespace(
             Id="FAKE-ENDPOINT-ID", GetDescription=lambda: "Fake output",

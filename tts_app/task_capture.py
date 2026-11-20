@@ -37,6 +37,8 @@ class TaskCaptureMixin:
                 "В выделении нет текста для чтения.",
             )
             return False
+        if self.text_box.cget("state") != "normal":
+            return False
 
         old_end_index = self.text_box.index("end-1c")
         separator = self._append_separator(captured_text, old_end_index)
@@ -191,14 +193,33 @@ class TaskCaptureMixin:
 
     def paste_text_from_editor(self, _event=None) -> str:
         """Handle the editor's <<Paste>> with its normal selection and undo rules."""
-        if self.text_box.cget("state") == "normal":
-            try:
-                text = self.app.root.clipboard_get()
-            except tk.TclError:
-                return "break"  # Same behavior as the default Tk binding.
-            if text:
-                self._paste_at_cursor(text, origin="editor_paste")
+        if self.text_box.cget("state") != "normal":
+            self._log_paste_rejected("editor_paste", "validate_target", "editor_disabled")
+            return "break"
+        try:
+            text = self.app.root.clipboard_get()
+        except tk.TclError:
+            self._log_paste_rejected("editor_paste", "clipboard_read", "clipboard_unavailable")
+            return "break"
+        if not text:
+            self._log_paste_rejected("editor_paste", "clipboard_read", "clipboard_empty")
+            return "break"
+        try:
+            replaced = self._paste_at_cursor(text, origin="editor_paste")
+        except (tk.TclError, ValueError, TypeError) as exc:
+            self._log_paste_rejected("editor_paste", "insert", "paste_exception", type(exc).__name__)
+            raise
+        self.app.logger.event(
+            "clipboard_text_pasted", task_id=self.task_id, tab_id=self.workspace_id,
+            source="editor_paste", chars=len(text), replaced_selection=replaced,
+        )
         return "break"
+
+    def _log_paste_rejected(self, source, stage, reason, exception_type=None):
+        self.app.logger.event(
+            "text_paste_rejected", task_id=self.task_id, tab_id=self.workspace_id,
+            source=source, stage=stage, reason=reason, exception_type=exception_type,
+        )
 
     def _paste_at_cursor(self, text: str, *, origin: str) -> bool:
         box = self.text_box
@@ -236,15 +257,20 @@ class TaskCaptureMixin:
             is picked up automatically and reading continues.
         """
         if self.worker and self.worker.is_alive():
+            self._log_paste_rejected("paste_button", "validate_target", "mp3_running")
             messagebox.showwarning(
                 APP_TITLE,
                 "Нельзя изменять текст, пока эта вкладка создаёт MP3.",
             )
             return
+        if self.text_box.cget("state") != "normal":
+            self._log_paste_rejected("paste_button", "validate_target", "editor_disabled")
+            return
 
         try:
             clipboard_text = self.app.root.clipboard_get()
         except tk.TclError:
+            self._log_paste_rejected("paste_button", "clipboard_read", "clipboard_unavailable")
             messagebox.showwarning(
                 APP_TITLE,
                 "В буфере обмена нет текста для вставки.",
@@ -252,6 +278,7 @@ class TaskCaptureMixin:
             return
 
         if not isinstance(clipboard_text, str) or not clipboard_text:
+            self._log_paste_rejected("paste_button", "clipboard_read", "clipboard_empty")
             messagebox.showwarning(
                 APP_TITLE,
                 "В буфере обмена нет текста для вставки.",
@@ -337,6 +364,7 @@ class TaskCaptureMixin:
                     "clipboard_text_appended_during_preview",
                     task_id=self.task_id,
                     tab_id=self.workspace_id,
+                    source="paste_button",
                     preview_run_id=self.current_preview_run_id,
                     clipboard_chars=len(clipboard_text),
                     inserted_chars=len(added_text),
@@ -372,11 +400,13 @@ class TaskCaptureMixin:
                 "clipboard_text_pasted",
                 task_id=self.task_id,
                 tab_id=self.workspace_id,
+                source="paste_button",
                 chars=len(clipboard_text),
                 replaced_selection=had_selection,
             )
 
         except (tk.TclError, TypeError, ValueError) as exc:
+            self._log_paste_rejected("paste_button", "insert", "paste_exception", type(exc).__name__)
             self.app.log_ui_error(
                 task_id=self.task_id,
                 stage="paste_clipboard_text",

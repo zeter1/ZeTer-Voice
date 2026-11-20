@@ -123,8 +123,7 @@ class CaptureTests(unittest.TestCase):
         task.preview_stop_event = threading.Event()
         task.preview_pause_event = threading.Event()
         task.preview_base_mark = "preview-start"
-        task.preview_button = task.preview_cursor_button = Mock()
-        task.pause_preview_button = task.resume_preview_button = task.stop_preview_button = Mock()
+        task._set_playback_controls = Mock()
         added = "First line 😀\nВторая строка."
         worker = Mock()
         with patch("tts_app.task_preview_player.threading.Thread", return_value=worker):
@@ -236,6 +235,31 @@ class CaptureTests(unittest.TestCase):
         self.assertEqual(viewport, ["2.0"])
         self.assertEqual(task.text_box.get("2.0", "insert"), added)
         self.assertEqual(task.text_box.get("1.0", "end-1c"), f"Heading\n{added}\nTail")
+        event = task.app.logger.event.call_args
+        self.assertEqual(event.args[0], "clipboard_text_pasted")
+        self.assertEqual(event.kwargs["source"], "paste_button")
+        self.assertEqual(event.kwargs["chars"], len(added))
+        self.assertNotIn(added, repr(event))
+
+    def test_missing_clipboard_is_logged_for_button_and_editor(self):
+        task = CaptureTask(self.root, "Existing text")
+        task.app.root.clipboard_get.side_effect = tk.TclError("PRIVATE_CLIPBOARD_ERROR")
+        self.assertEqual(task.paste_text_from_editor(), "break")
+        with patch("tts_app.task_capture.messagebox.showwarning"):
+            task.paste_text_from_clipboard()
+        events = task.app.logger.event.call_args_list
+        self.assertEqual([event.args[0] for event in events], ["text_paste_rejected"] * 2)
+        self.assertEqual([event.kwargs["source"] for event in events], ["editor_paste", "paste_button"])
+        self.assertTrue(all(event.kwargs["stage"] == "clipboard_read" for event in events))
+        self.assertNotIn("PRIVATE_CLIPBOARD_ERROR", repr(events))
+        self.assertEqual(task.text_box.get("1.0", "end-1c"), "Existing text")
+
+    def test_disabled_editor_declines_capture_instead_of_reporting_success(self):
+        task = CaptureTask(self.root, "Existing text")
+        task.text_box.configure(state="disabled")
+        self.assertFalse(task.append_external_selected_text("Never inserted"))
+        self.assertFalse(task.app.logger.event.called)
+        self.assertEqual(task.text_box.get("1.0", "end-1c"), "Existing text")
 
     def test_ctrl_v_prepares_joined_line_and_replaces_selection_as_one_undo(self):
         left, right = "А" * 12_000, "Б" * 9_000

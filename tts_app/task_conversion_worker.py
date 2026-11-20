@@ -27,6 +27,8 @@ class TaskConversionWorkerMixin:
         recovery_work_dir: Path | None = None,
         *,
         approved_output_identity: tuple[int, ...] | None = None,
+        channels: int = 0,
+        sample_rate_hz: int = 0,
     ) -> None:
         # CODEX-REGION: worker-bootstrap
         try:
@@ -106,6 +108,8 @@ class TaskConversionWorkerMixin:
             "pitch": pitch,
             "volume": volume,
             "bitrate": bitrate,
+            "mp3_channels": channels,
+            "mp3_sample_rate_hz": sample_rate_hz,
             "chars": len(text),
             "text_sha256_16": text_hash,
             "text_sha256": text_hash_full,
@@ -116,7 +120,7 @@ class TaskConversionWorkerMixin:
                 else ""
             ),
             "mp3_text_backup_retention_days": (
-                MP3_TEXT_BACKUP_RETENTION_DAYS
+                getattr(self.app, "settings", {}).get("text_backup_retention_days", MP3_TEXT_BACKUP_RETENTION_DAYS)
             ),
             "output_path": str(output_path),
             "output_before": output_snapshot_before,
@@ -228,6 +232,8 @@ class TaskConversionWorkerMixin:
                     "pitch": pitch,
                     "volume": volume,
                     "bitrate": bitrate,
+                    "mp3_channels": channels,
+                    "mp3_sample_rate_hz": sample_rate_hz,
                     "temp_wav_bytes": temp_wav_bytes,
                     "sampled_audio_sec": round(
                         sampled_audio_sec,
@@ -998,6 +1004,8 @@ class TaskConversionWorkerMixin:
                 work_dir=work_dir,
                 cancel_event=self.cancel_event,
                 progress_callback=report_ffmpeg_progress,
+                channels=channels,
+                sample_rate_hz=sample_rate_hz,
             )
             ffmpeg_duration = float(
                 ffmpeg_result.get("duration_sec") or 0
@@ -1037,6 +1045,8 @@ class TaskConversionWorkerMixin:
                 candidate_mp3,
                 ffmpeg_audio_duration,
                 self.cancel_event,
+                channels=channels,
+                sample_rate_hz=sample_rate_hz,
             )
             validation_error = output_validation.get("fatal_error")
 

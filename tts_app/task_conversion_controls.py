@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .engine_manager_ui import engine_operation_busy
+from .mp3_format import read_mp3_format
 
 from .runtime import *
 from .problem_logger import ProblemLogger
@@ -13,9 +14,14 @@ class TaskConversionControlsMixin:
     def ask_output_path(self) -> Path | None:
         kwargs = {}
 
-        last_dir = self.app.settings.get("last_output_dir")
-        if last_dir and Path(last_dir).is_dir():
-            kwargs["initialdir"] = last_dir
+        for key in ("mp3_output_dir", "last_output_dir"):
+            folder = self.app.settings.get(key)
+            try:
+                if folder and Path(folder).is_dir():
+                    kwargs["initialdir"] = folder
+                    break
+            except OSError:
+                continue
 
         title = self.tab_title().strip()
         if title and not title.startswith("Задача "):
@@ -95,7 +101,7 @@ class TaskConversionControlsMixin:
         rate = clamp_int(self.rate_var.get(), RATE_MIN, RATE_MAX, 0)
         pitch = clamp_int(self.pitch_var.get(), PITCH_MIN, PITCH_MAX, 0)
         volume = clamp_int(self.volume_var.get(), 0, 100, 100)
-        bitrate = self.bitrate_var.get().strip() or "96k"
+        bitrate, channels, sample_rate_hz = read_mp3_format(self.app.settings)
         tab_title_snapshot = self.tab_title()
         visible_tab_index_snapshot = self.app.visible_tab_index(self)
 
@@ -120,7 +126,8 @@ class TaskConversionControlsMixin:
 
         self._launch_mp3_job(
             run_id, raw_text, tab_title_snapshot, visible_tab_index_snapshot, output_path,
-            voice, rate, pitch, volume, bitrate, approved_output_identity=approved_output_identity,
+            voice, rate, pitch, volume, bitrate, channels=channels, sample_rate_hz=sample_rate_hz,
+            approved_output_identity=approved_output_identity,
         )
 
     def resume_recovery_job(
@@ -189,10 +196,9 @@ class TaskConversionControlsMixin:
             100,
             self.volume_var.get(),
         )
-        bitrate = str(
-            manifest.get("bitrate")
-            or self.bitrate_var.get().strip()
-            or "96k"
+        bitrate, channels, sample_rate_hz = read_mp3_format(
+            {**manifest, "bitrate": manifest.get("bitrate") or self.app.settings.get("bitrate")},
+            sample_rate_default=0,
         )
 
         # Reflect the exact saved recovery parameters in the UI. Pitch remains
@@ -201,7 +207,6 @@ class TaskConversionControlsMixin:
         self.app.global_rate_var.set(rate)
         self.app.global_pitch_var.set(pitch)
         self.volume_var.set(volume)
-        self.bitrate_var.set(bitrate)
 
         tab_title_snapshot = self.tab_title()
         visible_tab_index_snapshot = (
@@ -225,6 +230,7 @@ class TaskConversionControlsMixin:
         self._launch_mp3_job(
             run_id, raw_text, tab_title_snapshot, visible_tab_index_snapshot, output_path,
             voice, rate, pitch, volume, bitrate, work_dir=work_dir, normalized_text=text,
+            channels=channels, sample_rate_hz=sample_rate_hz,
         )
         return True
 
@@ -232,6 +238,7 @@ class TaskConversionControlsMixin:
         self, run_id: str, raw_text: str, tab_title: str, tab_index: int | None,
         output_path: Path, voice: str, rate: int, pitch: int, volume: int, bitrate: str,
         *, work_dir: Path | None = None, normalized_text: str | None = None,
+        channels: int = 0, sample_rate_hz: int = 0,
         approved_output_identity: tuple[int, ...] | None = None,
     ) -> None:
         self.stop_preview(
@@ -245,8 +252,7 @@ class TaskConversionControlsMixin:
         self.current_job_stage = "queued"
 
         self.progress["value"] = 0
-        self.start_button.configure(state="disabled")
-        self.cancel_button.configure(state="normal")
+        self._set_mp3_controls(active=True)
         self.status_var.set(f"Подготовка текста и резервной копии: {output_path.name}")
 
         def prepare_and_convert() -> None:
@@ -273,7 +279,8 @@ class TaskConversionControlsMixin:
                     "mp3_text_backup_created", task_id=run_id, run_id=run_id,
                     tab_id=self.workspace_id, backup_path=str(self.current_mp3_text_backup_path),
                     source_chars=len(raw_text), source_sha256_16=self.mp3_source_sha256[:16],
-                    retention_days=MP3_TEXT_BACKUP_RETENTION_DAYS, recovery_resume=bool(work_dir),
+                    retention_days=self.app.settings.get("text_backup_retention_days", MP3_TEXT_BACKUP_RETENTION_DAYS),
+                    recovery_resume=bool(work_dir),
                 )
                 if self.cancel_event.is_set():
                     raise InterruptedError
@@ -298,6 +305,7 @@ class TaskConversionControlsMixin:
             self._job_worker(
                 run_id, text, metrics, tab_title, tab_index, output_path, voice, rate, pitch,
                 volume, bitrate, work_dir, approved_output_identity=approved_output_identity,
+                channels=channels, sample_rate_hz=sample_rate_hz,
             )
 
         self.worker = threading.Thread(target=prepare_and_convert, name=f"tts-{run_id}", daemon=True)
@@ -329,8 +337,7 @@ class TaskConversionControlsMixin:
                 )
 
     def set_job_idle(self) -> None:
-        self.start_button.configure(state="normal")
-        self.cancel_button.configure(state="disabled")
+        self._set_mp3_controls(active=False)
         self.current_output_path = None
         self.current_mp3_text_backup_path = None
         self.current_run_id = None

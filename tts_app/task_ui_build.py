@@ -7,8 +7,10 @@ from .sapi import *
 from .ffmpeg_tools import *
 from .windows_tools import *
 from .ui_stall_diagnostics import ui_operation
+from .task_ui_sidebar import TaskUiSidebarMixin
+from .workspace_theme import FOCUS, INK, WHITE
 
-class TaskUiBuildMixin:
+class TaskUiBuildMixin(TaskUiSidebarMixin):
     def __init__(
         self,
         app: "TTSApp",
@@ -103,14 +105,13 @@ class TaskUiBuildMixin:
         self.voice_var = tk.StringVar(value=str(tab_settings.get("voice") or DEFAULT_VOICE_HINT))
 
         # Speed and Pitch are intentionally ONE shared Tk variable each for the
-        # whole application. Every tab's sliders point to these same variables,
-        # so changing either value in one tab instantly updates every other tab.
+        # whole application. Spinboxes edit these variables directly, and the
+        # application trace synchronizes each slider's display value.
         self.rate_var = app.global_rate_var
         self.pitch_var = app.global_pitch_var
         self.audio_output_var = app.global_audio_output_var
 
         self.volume_var = tk.IntVar(value=clamp_int(tab_settings.get("volume"), 0, 100, 100))
-        self.bitrate_var = tk.StringVar(value=str(tab_settings.get("bitrate") or "96k"))
         self.delete_read_text_var = tk.BooleanVar(
             value=bool(tab_settings.get("delete_read_text", False))
         )
@@ -170,398 +171,152 @@ class TaskUiBuildMixin:
         for variable in (
             self.voice_var,
             self.volume_var,
-            self.bitrate_var,
             self.delete_read_text_var,
             self.auto_read_hotkey_var,
         ):
             variable.trace_add("write", self._settings_changed)
 
     def _build_ui(self) -> None:
-        toolbar = ttk.Frame(self.frame)
-        toolbar.pack(fill="x")
+        self.frame.columnconfigure(0, weight=1)
+        self.frame.rowconfigure(0, weight=1)
+        body = ttk.Frame(self.frame)
+        body.grid(row=0, column=0, sticky="nsew")
+        body.columnconfigure(0, weight=1)
+        body.rowconfigure(0, weight=1)
+        self._build_editor(body)
 
-        ttk.Button(
-            toolbar,
-            text="Вставить текст",
-            command=self.paste_text_from_clipboard,
-        ).pack(side="left")
+        self.sidebar = ttk.Frame(body)
+        self.sidebar.grid(row=0, column=1, sticky="nsew", padx=(14, 0))
+        self._sidebar_compact = None
 
-        ttk.Button(
-            toolbar,
-            text="Очистить",
-            command=self.clear_text,
-        ).pack(side="left", padx=(6, 0))
+        self._build_playback_bar(body)
+        status = ttk.Frame(self.frame)
+        status.grid(row=1, column=0, sticky="ew", pady=(8, 0))
+        status.columnconfigure(0, weight=1)
+        ttk.Label(status, textvariable=self.status_var, style="Note.TLabel", width=1).grid(row=0, column=0, sticky="ew")
+        self.edge_privacy_note = ttk.Label(status, text="Edge передаёт текст Microsoft", style="Note.TLabel")
+        self.edge_privacy_note.grid(row=0, column=1, padx=(8, 0))
+        self.sidebar_hotkey_hint = ttk.Frame(status)
+        self.sidebar_hotkey_hint.grid(row=0, column=2, padx=(8, 10))
+        ttk.Label(self.sidebar_hotkey_hint, text="Захват:", style="Note.TLabel").pack(side="left")
+        self.sidebar_hotkey = ttk.Label(self.sidebar_hotkey_hint, textvariable=self.copy_hotkey_var, style="Note.TLabel", width=10)
+        self.sidebar_hotkey.pack(side="left", padx=(4, 0))
+        self.sidebar_button = ttk.Button(status, command=self._toggle_sidebar)
+        self.sidebar_button.grid(row=0, column=3)
+        self._build_sidebar()
+        self._show_sidebar(True)
+        body.bind("<Configure>", self._resize_sidebar, add="+")
 
-        self.start_button = ttk.Button(
-            toolbar,
-            text="Создать MP3",
-            command=self.start_job,
-        )
-        self.start_button.pack(side="left", padx=(18, 0))
+    def _build_editor(self, body: ttk.Frame) -> None:
+        editor = ttk.Frame(body, style="Card.TFrame")
+        editor.grid(row=0, column=0, sticky="nsew")
+        editor.columnconfigure(0, weight=1)
+        editor.rowconfigure(2, weight=1)
 
-        self.cancel_button = ttk.Button(
-            toolbar,
-            text="Остановить создание MP3",
-            command=self.cancel_job,
-            state="disabled",
-        )
-        self.cancel_button.pack(side="left", padx=(6, 0))
+        header = ttk.Frame(editor, style="Paper.TFrame")
+        header.grid(row=0, column=0, sticky="ew", padx=16, pady=11)
+        header.columnconfigure(0, weight=1)
+        ttk.Label(header, text="Текст для озвучивания", style="Heading.Card.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Button(header, text="⎘  Вставить текст", command=self.paste_text_from_clipboard).grid(row=0, column=1, padx=(8, 6))
+        menu_button = ttk.Menubutton(header, text="⋯", width=3, style="Compact.TMenubutton")
+        menu_button.grid(row=0, column=2)
+        self.editor_menu = tk.Menu(menu_button, tearoff=False)
+        self.editor_menu.add_command(label="Начать чтение заново", command=self.start_preview)
+        self.editor_menu.add_separator()
+        self.editor_menu.add_command(label="Открыть текстовый файл…", command=self.load_file)
+        self.editor_menu.add_command(label="Очистить текст", command=self.clear_text)
+        menu_button.configure(menu=self.editor_menu)
+        ttk.Separator(editor).grid(row=1, column=0, sticky="ew")
 
-        self.preview_button = ttk.Button(
-            toolbar,
-            text="▶ Воспроизвести текст",
-            command=self.start_preview,
-        )
-        self.preview_button.pack(side="left", padx=(18, 0))
-
-        self.preview_cursor_button = ttk.Button(
-            toolbar,
-            text="▶ Читать с курсора",
-            command=self.start_preview_from_cursor,
-        )
-        self.preview_cursor_button.pack(side="left", padx=(6, 0))
-
-        self.pause_preview_button = ttk.Button(
-            toolbar,
-            text="⏸ Пауза",
-            command=self.pause_preview,
-            state="disabled",
-        )
-        self.pause_preview_button.pack(side="left", padx=(10, 0))
-
-        self.resume_preview_button = ttk.Button(
-            toolbar,
-            text="▶ Продолжить",
-            command=self.resume_preview,
-            state="disabled",
-        )
-        self.resume_preview_button.pack(side="left", padx=(6, 0))
-
-        self.stop_preview_button = ttk.Button(
-            toolbar,
-            text="■ Остановить",
-            command=self.stop_preview,
-            state="disabled",
-        )
-        self.stop_preview_button.pack(side="left", padx=(6, 0))
-
-        capture_bar = ttk.Frame(self.frame)
-        capture_bar.pack(fill="x", pady=(6, 0))
-
-        ttk.Label(
-            capture_bar,
-            text="Горячая клавиша чтения:",
-        ).pack(side="left")
-
-        self.copy_hotkey_combo = ttk.Combobox(
-            capture_bar,
-            textvariable=self.copy_hotkey_var,
-            values=(
-                TAB_HOTKEY_NONE_LABEL,
-                *GlobalCopyHotkeyMonitor.PRESET_HOTKEYS,
-            ),
-            state="normal",
-            width=16,
-        )
-        self.copy_hotkey_combo.pack(
-            side="left",
-            padx=(6, 0),
-        )
-        self.copy_hotkey_combo.bind(
-            "<<ComboboxSelected>>",
-            lambda _event: self.apply_copy_hotkey(),
-        )
-        self.copy_hotkey_combo.bind(
-            "<FocusOut>",
-            lambda _event: self.apply_copy_hotkey(
-                silent=True
-            ),
-        )
-        self.copy_hotkey_combo.bind(
-            "<Return>",
-            lambda _event: self.apply_copy_hotkey(),
-        )
-
-        ttk.Label(
-            capture_bar,
-            textvariable=self.copy_hotkey_status_var,
-        ).pack(side="left", padx=(10, 0))
-
-        ttk.Checkbutton(
-            capture_bar,
-            text="Удалять прочитанные предложения",
-            variable=self.delete_read_text_var,
-        ).pack(side="left", padx=(18, 0))
-
-        ttk.Checkbutton(
-            capture_bar,
-            text="Сразу читать добавленный текст",
-            variable=self.auto_read_hotkey_var,
-        ).pack(side="left", padx=(18, 0))
-
-        ttk.Label(
-            capture_bar,
-            textvariable=self.queue_status_var,
-            anchor="e",
-        ).pack(side="right", padx=(16, 0))
-
-        text_header = ttk.Frame(self.frame)
-        text_header.pack(fill="x", pady=(10, 4))
-        ttk.Label(text_header, text="Текст для озвучки:").pack(side="left")
-        ttk.Checkbutton(
-            text_header,
-            text="Перенос строк",
-            variable=self._word_wrap_var,
-            command=self._on_word_wrap_changed,
-        ).pack(side="right")
-
-        text_frame = ttk.Frame(self.frame)
-        text_frame.pack(fill="both", expand=True)
-
-        text_row = ttk.Frame(text_frame)
+        text_frame = ttk.Frame(editor, style="Paper.TFrame")
+        text_frame.grid(row=2, column=0, sticky="nsew")
+        text_row = ttk.Frame(text_frame, style="Paper.TFrame")
         text_row.pack(side="top", fill="both", expand=True)
-
         self.text_box = tk.Text(
-            text_row,
-            wrap="word",
-            undo=True,
-            font=("Segoe UI", 10),
+            text_row, wrap="word", undo=True, font=self.app.editor_font,
+            background=WHITE, foreground=INK, insertbackground=INK,
+            selectbackground="#d7e5ff", selectforeground=INK,
+            padx=18, pady=14, spacing1=2, spacing3=3, width=1, height=1,
+            borderwidth=0, highlightthickness=1, highlightbackground=WHITE, highlightcolor=FOCUS,
         )
+        scrollbar = ttk.Scrollbar(text_row, orient="vertical", command=self.text_box.yview)
+        def sync_vertical_scroll(first: str, last: str) -> None:
+            scrollbar.set(first, last)
+            fits = float(first) <= 0 and float(last) >= 1
+            if fits and scrollbar.winfo_manager():
+                scrollbar.pack_forget()
+            elif not fits and not scrollbar.winfo_manager():
+                scrollbar.pack(side="right", fill="y")
 
-        scrollbar = ttk.Scrollbar(
-            text_row,
-            orient="vertical",
-            command=self.text_box.yview,
-        )
-        self.text_box.configure(yscrollcommand=scrollbar.set)
-
-        # Отдельный тег текущего читаемого предложения. Он не меняет текст,
-        # не мешает обычному выделению мышью и снимается после остановки.
-        self.text_box.tag_configure(
-            "preview_current",
-            background="#fff2a8",
-            relief="solid",
-            borderwidth=1,
-        )
-
-        # Instance-level binding runs before Tk's Text class binding.
-        # This makes Ctrl+C/V/X/A/Z/Y work by the same physical keys under
-        # English and Russian keyboard layouts without double copy/paste.
+        self.text_box.configure(yscrollcommand=sync_vertical_scroll)
+        self.apply_editor_highlight()
         self.text_box.bind(
             "<Control-KeyPress>",
-            lambda event: handle_text_ctrl_shortcut(
-                self.text_box,
-                event,
-            ),
+            lambda event: handle_text_ctrl_shortcut(self.text_box, event),
             add="+",
         )
         self.text_box.bind("<<Paste>>", self.paste_text_from_editor, add="+")
-
         self.text_box.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-        self.horizontal_scrollbar = ttk.Scrollbar(
-            text_frame, orient="horizontal", command=self.text_box.xview,
-        )
+        self.horizontal_scrollbar = ttk.Scrollbar(text_frame, orient="horizontal", command=self.text_box.xview)
         self.text_box.configure(xscrollcommand=self.horizontal_scrollbar.set)
 
-        voice_group = ttk.LabelFrame(
-            self.frame,
-            text="Параметры голоса · Silero: офлайн; Edge: текст → Microsoft",
-            padding=10,
-        )
-        voice_group.pack(fill="x", pady=(10, 0))
+        ttk.Separator(editor).grid(row=3, column=0, sticky="ew")
+        footer = ttk.Frame(editor, style="Paper.TFrame")
+        footer.grid(row=4, column=0, sticky="ew", padx=16, pady=7)
+        footer.columnconfigure(0, weight=1)
+        ttk.Label(footer, textvariable=self.queue_status_var, style="Note.Card.TLabel", width=1).grid(row=0, column=0, sticky="ew")
+        ttk.Checkbutton(
+            footer, text="Перенос строк", style="Card.TCheckbutton",
+            variable=self._word_wrap_var, command=self._on_word_wrap_changed,
+        ).grid(row=0, column=1, padx=(8, 0))
 
-        voice_group.columnconfigure(1, weight=1)
-        voice_group.columnconfigure(4, weight=1)
-
-        ttk.Label(voice_group, text="Голос:").grid(
-            row=0,
-            column=0,
-            sticky="w",
-        )
-
-        self.voice_combo = ttk.Combobox(
-            voice_group,
-            textvariable=self.voice_var,
-            state="readonly",
-        )
-        self.voice_combo.grid(
-            row=0,
-            column=1,
-            columnspan=5,
-            sticky="ew",
-            padx=(8, 0),
-        )
-        self.voice_combo["values"] = self.app.voices
-
-        ttk.Label(voice_group, text="Скорость:").grid(
-            row=1,
-            column=0,
-            sticky="w",
-            pady=(9, 0),
+    def apply_editor_highlight(self) -> None:
+        enabled = self.app.settings.get("highlight_current_sentence", True)
+        self.text_box.tag_configure(
+            "preview_current", background="#fff2a8" if enabled else "",
+            relief="solid" if enabled else "flat", borderwidth=1 if enabled else 0,
         )
 
-        self.rate_scale = tk.Scale(
-            voice_group,
-            from_=RATE_MIN,
-            to=RATE_MAX,
-            orient="horizontal",
-            resolution=1,
-            showvalue=False,
-            variable=self.rate_var,
-            length=300,
-        )
-        self.rate_scale.grid(
-            row=1,
-            column=1,
-            sticky="ew",
-            padx=(8, 6),
-            pady=(3, 0),
-        )
+    def _build_playback_bar(self, body: ttk.Frame) -> None:
+        bar = self.playback_bar = ttk.Frame(body, style="Card.TFrame", padding=(15, 12))
+        bar.grid(row=1, column=0, sticky="ew", pady=(12, 0))
+        bar.columnconfigure(3, weight=1)
+        self.preview_button = ttk.Button(bar, style="Primary.TButton", width=13)
+        self.preview_button.grid(row=0, column=0, padx=(0, 8))
+        self.preview_cursor_button = ttk.Button(bar, text="Читать с курсора", command=self.start_preview_from_cursor)
+        self.preview_cursor_button.grid(row=0, column=1, padx=(0, 8))
+        self.stop_preview_button = ttk.Button(bar, text="■  Остановить", command=self.stop_preview)
+        self.stop_preview_button.grid(row=0, column=2)
 
-        ttk.Spinbox(
-            voice_group,
-            from_=RATE_MIN,
-            to=RATE_MAX,
-            textvariable=self.rate_var,
-            width=6,
-        ).grid(
-            row=1,
-            column=2,
-            sticky="w",
-            pady=(9, 0),
-        )
+        self.start_button = ttk.Button(bar, text="↓  Создать MP3", command=self.start_job)
+        self.start_button.grid(row=0, column=5, padx=(7, 0))
+        self.progress = ttk.Progressbar(bar, maximum=100, mode="determinate", length=130)
+        self.progress.grid(row=0, column=4, padx=(8, 0))
+        self.cancel_button = ttk.Button(bar, text="Отменить MP3", command=self.cancel_job)
+        self.cancel_button.grid(row=0, column=5, padx=(8, 0))
+        self._set_mp3_controls(active=False)
+        self._set_playback_controls("idle")
 
-        ttk.Label(voice_group, text="Pitch:").grid(
-            row=1,
-            column=3,
-            sticky="w",
-            padx=(22, 0),
-            pady=(9, 0),
-        )
+    def _set_playback_controls(self, mode: str) -> None:
+        text, action = {
+            "idle": ("▶ Читать", self.start_preview),
+            "running": ("Пауза", self.pause_preview),
+            "paused": ("Продолжить", self.resume_preview),
+            "saved": ("Продолжить", self.resume_preview),
+            "busy": ("Подождите…", self.start_preview),
+        }[mode]
+        self.preview_button.configure(text=text, command=action, state="disabled" if mode == "busy" else "normal")
+        self.preview_cursor_button.configure(state="normal" if mode in ("idle", "saved") else "disabled")
+        self.stop_preview_button.configure(state="normal" if mode in ("running", "paused", "saved") else "disabled")
+        self.editor_menu.entryconfigure(0, state="normal" if mode in ("idle", "saved") else "disabled")
 
-        self.pitch_scale = tk.Scale(
-            voice_group,
-            from_=PITCH_MIN,
-            to=PITCH_MAX,
-            orient="horizontal",
-            resolution=1,
-            showvalue=False,
-            variable=self.pitch_var,
-            length=300,
-        )
-        self.pitch_scale.grid(
-            row=1,
-            column=4,
-            sticky="ew",
-            padx=(8, 6),
-            pady=(3, 0),
-        )
-
-        ttk.Spinbox(
-            voice_group,
-            from_=PITCH_MIN,
-            to=PITCH_MAX,
-            textvariable=self.pitch_var,
-            width=6,
-        ).grid(
-            row=1,
-            column=5,
-            sticky="w",
-            pady=(9, 0),
-        )
-
-        ttk.Label(voice_group, text="Громкость:").grid(
-            row=2,
-            column=0,
-            sticky="w",
-            pady=(8, 0),
-        )
-
-        ttk.Spinbox(
-            voice_group,
-            from_=0,
-            to=100,
-            textvariable=self.volume_var,
-            width=7,
-        ).grid(
-            row=2,
-            column=1,
-            sticky="w",
-            padx=(8, 0),
-            pady=(8, 0),
-        )
-
-        ttk.Label(voice_group, text="Качество MP3:").grid(
-            row=2,
-            column=3,
-            sticky="w",
-            padx=(22, 0),
-            pady=(8, 0),
-        )
-
-        ttk.Combobox(
-            voice_group,
-            textvariable=self.bitrate_var,
-            values=("64k", "96k", "128k", "160k", "192k"),
-            state="readonly",
-            width=9,
-        ).grid(
-            row=2,
-            column=4,
-            sticky="w",
-            padx=(8, 0),
-            pady=(8, 0),
-        )
-
-        ttk.Label(
-            voice_group,
-            text="Устройство воспроизведения:",
-        ).grid(
-            row=3,
-            column=0,
-            sticky="w",
-            pady=(8, 0),
-        )
-
-        self.audio_output_combo = ttk.Combobox(
-            voice_group,
-            textvariable=self.audio_output_var,
-            values=self.app.audio_output_choices,
-            state="readonly",
-        )
-        self.audio_output_combo.grid(
-            row=3,
-            column=1,
-            columnspan=4,
-            sticky="ew",
-            padx=(8, 0),
-            pady=(8, 0),
-        )
-
-        ttk.Button(
-            voice_group,
-            text="↻ Обновить",
-            command=self.app.refresh_audio_outputs,
-        ).grid(
-            row=3,
-            column=5,
-            sticky="e",
-            padx=(8, 0),
-            pady=(8, 0),
-        )
-
-        progress_group = ttk.Frame(self.frame)
-        progress_group.pack(fill="x", pady=(10, 0))
-
-        self.progress = ttk.Progressbar(
-            progress_group,
-            maximum=100,
-            mode="determinate",
-        )
-        self.progress.pack(fill="x")
-
-        ttk.Label(
-            progress_group,
-            textvariable=self.status_var,
-        ).pack(anchor="w", pady=(5, 0))
+    def _set_mp3_controls(self, *, active: bool) -> None:
+        active_controls = (self.progress, self.cancel_button)
+        if active:
+            self.start_button.grid_remove()
+            for widget in active_controls:
+                widget.grid()
+        else:
+            for widget in active_controls:
+                widget.grid_remove()
+            self.start_button.grid()

@@ -12,13 +12,20 @@ from .widgets import *
 CAPTURE_FAILURE_STATUS = {
     "capture_busy": "Предыдущий захват ещё идёт. После завершения выделите текст снова и повторите.",
     "clipboard_empty": "Буфер не получил текста. Проверьте выделение и повторите.",
-    "clipboard_needs_manual_copy": "Дождитесь конца копирования. Нажмите Ctrl+C, снова выделите текст и повторите.",
+    "clipboard_dispatch_failed": "Не удалось передать команду копирования. Нажмите горячую клавишу ещё раз.",
     "clipboard_owner_changed": "Буфер обновило другое приложение. Выделите текст снова и повторите.",
     "clipboard_read_failed": "Не удалось прочитать текст из буфера. Выделите его и повторите.",
     "clipboard_send_failed": "Windows не принял команду копирования. Выделите текст и повторите.",
     "clipboard_superseded": "Копирования наложились. Выделите текст и повторите захват по одному разу.",
-    "clipboard_timeout": "Источник не прислал текст вовремя. Нажмите Ctrl+C и снова выделите текст для захвата.",
+    "clipboard_timeout": "Источник не прислал текст вовремя. Проверьте выделение и нажмите горячую клавишу ещё раз.",
 }
+
+CAPTURE_LOG_FIELDS = (
+    "capture_id", "capture_protocol", "capture_stage", "copy_kind",
+    "source_process", "source_pid", "copy_latency_ms", "dispatch_ms", "send_input_accepted", "delivery_ms",
+    "clipboard_notified", "clipboard_sequence_changed", "clipboard_update_ms",
+    "clipboard_owner_pid", "clipboard_unicode_available", "read_attempts",
+)
 
 
 class AppHotkeysMixin:
@@ -346,15 +353,15 @@ class AppHotkeysMixin:
             return
 
         hotkey = monitor.get_hotkey()
+        evidence = {key: capture_info[key] for key in CAPTURE_LOG_FIELDS if key in capture_info}
+        evidence.update(task_id=task.task_id, tab_id=task.workspace_id, hotkey=hotkey)
         rejected = capture_info.get("capture_rejected")
         captured = capture_info.get("captured_text")
         if not rejected and (not isinstance(captured, str) or not captured.strip()):
             rejected = "clipboard_empty"
         if rejected:
             self.logger.event(
-                "global_copy_capture_rejected", task_id=task.task_id, tab_id=task.workspace_id,
-                hotkey=hotkey, reason=rejected, source_pid=capture_info.get("source_pid"),
-                copy_latency_ms=capture_info.get("copy_latency_ms"),
+                "global_copy_capture_rejected", reason=rejected, **evidence,
             )
             task.status_var.set(CAPTURE_FAILURE_STATUS.get(
                 rejected, "Не удалось захватить текст. Выделите его и повторите.",
@@ -364,24 +371,35 @@ class AppHotkeysMixin:
         sequence = capture_info["clipboard_sequence_after"]
         if sequence is not None and sequence == getattr(monitor, "_last_appended_capture_sequence", None):
             self.logger.event(
-                "global_copy_duplicate_skipped", task_id=task.task_id, tab_id=task.workspace_id,
-                hotkey=hotkey, clipboard_sequence=sequence,
+                "global_copy_duplicate_skipped", clipboard_sequence=sequence, **evidence,
             )
             return
 
         preview_running = bool(task.preview_thread and task.preview_thread.is_alive())
         paused = bool(task.preview_is_paused)
         auto_read = bool(task.auto_read_hotkey_var.get())
-        if not task.append_external_selected_text(captured):
+        append_started = time.perf_counter()
+        evidence["capture_stage"] = "append_text"
+        try:
+            appended = task.append_external_selected_text(captured)
+        except (tk.TclError, TypeError, ValueError) as exc:
+            self.logger.event(
+                "global_copy_capture_rejected", reason="append_exception",
+                exception_type=type(exc).__name__, chars=len(captured), **evidence,
+            )
+            raise
+        if not appended:
+            self.logger.event(
+                "global_copy_capture_rejected", reason="append_declined", chars=len(captured), **evidence,
+            )
             return
         monitor._last_appended_capture_sequence = sequence
 
-        captured_hash = hashlib.sha256(captured.encode("utf-8")).hexdigest()[:16]
+        evidence["capture_stage"] = "appended"
         self.logger.event(
-            "global_copy_text_captured", task_id=task.task_id, tab_id=task.workspace_id,
-            tab_title=task.tab_title(), hotkey=hotkey, routing_mode="fixed_tab",
-            chars=len(captured), captured_sha256_16=captured_hash,
-            source_process=capture_info.get("source_process"), source_pid=capture_info.get("source_pid"),
-            copy_latency_ms=capture_info.get("copy_latency_ms"), clipboard_changed=True,
+            "global_copy_text_captured", routing_mode="fixed_tab",
+            chars=len(captured), clipboard_changed=True,
+            append_ms=round((time.perf_counter() - append_started) * 1000, 1),
             preview_running=preview_running, paused=paused, auto_read_hotkey_text=auto_read,
+            **evidence,
         )

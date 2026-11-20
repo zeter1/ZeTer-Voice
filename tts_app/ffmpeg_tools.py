@@ -118,6 +118,9 @@ def run_ffmpeg_concat(
     work_dir: Path,
     cancel_event: threading.Event | None = None,
     progress_callback=None,
+    *,
+    channels: int = 0,
+    sample_rate_hz: int = 0,
 ) -> dict:
     """
     Concatenate WAV files and encode MP3 with live progress and cancellation.
@@ -142,6 +145,11 @@ def run_ffmpeg_concat(
     temporary_output.unlink(missing_ok=True)
 
     total_audio_sec = wav_total_duration_seconds(wav_files)
+    output_format = []
+    if channels:
+        output_format.extend(("-ac", str(channels)))
+    if sample_rate_hz:
+        output_format.extend(("-ar", str(sample_rate_hz)))
 
     command = [
         ffmpeg,
@@ -160,6 +168,7 @@ def run_ffmpeg_concat(
         "libmp3lame",
         "-b:a",
         bitrate,
+        *output_format,
         "-write_xing",
         "1",
         "-progress",

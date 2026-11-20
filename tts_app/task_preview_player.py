@@ -123,11 +123,7 @@ class TaskPreviewPlayerMixin:
             )
         self.clear_preview_highlight()
 
-        self.preview_button.configure(state="disabled")
-        self.preview_cursor_button.configure(state="disabled")
-        self.pause_preview_button.configure(state="normal")
-        self.resume_preview_button.configure(state="disabled")
-        self.stop_preview_button.configure(state="normal")
+        self._set_playback_controls("running")
 
         if source_mode == "cursor":
             self.status_var.set("Начинаю чтение с позиции курсора…")

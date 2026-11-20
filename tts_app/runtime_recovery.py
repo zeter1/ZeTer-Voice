@@ -18,17 +18,17 @@ def cleanup_legacy_temp_workdirs() -> int:
     for path in candidates:
         try:
             if path.is_dir() and path.stat().st_mtime < cutoff:
-                shutil.rmtree(path, ignore_errors=True)
+                shutil.rmtree(path)
                 removed += 1
-        except Exception:
+        except OSError:
             pass
     return removed
 
 
-def scan_recovery_jobs() -> tuple[list[dict], int]:
+def scan_recovery_jobs(*, deferred: list[Path] | None = None) -> tuple[list[dict], int]:
     """
-    Return resumable job manifests and remove expired/corrupt recovery folders.
-    Live jobs owned by any running process are never touched.
+    Return resumable jobs and count successfully removed expired folders.
+    Keep live jobs and folders whose state could not be verified.
     """
     RECOVERY_DIR.mkdir(parents=True, exist_ok=True)
     jobs: list[dict] = []
@@ -36,11 +36,10 @@ def scan_recovery_jobs() -> tuple[list[dict], int]:
     cutoff = time.time() - RECOVERY_RETENTION_DAYS * 86400
 
     for job_dir in RECOVERY_DIR.glob("job_*"):
-        if not job_dir.is_dir():
-            continue
-
         manifest_path = job_dir / "recovery.json"
         try:
+            if not job_dir.is_dir() or job_dir.is_symlink() or job_dir.is_junction():
+                continue
             payload = json.loads(
                 manifest_path.read_text(encoding="utf-8")
             )
@@ -81,7 +80,7 @@ def scan_recovery_jobs() -> tuple[list[dict], int]:
                 continue
 
             if job_dir.stat().st_mtime < cutoff:
-                shutil.rmtree(job_dir, ignore_errors=True)
+                shutil.rmtree(job_dir)
                 removed += 1
                 continue
 
@@ -89,9 +88,11 @@ def scan_recovery_jobs() -> tuple[list[dict], int]:
             payload["_manifest_path"] = str(manifest_path)
             jobs.append(payload)
 
-        except Exception:
-            shutil.rmtree(job_dir, ignore_errors=True)
-            removed += 1
+        except (OSError, ValueError):
+            # A sharing violation or an incomplete manifest says nothing about
+            # the usable WAV checkpoints and text already saved in this folder.
+            if deferred is not None:
+                deferred.append(job_dir)
 
     jobs.sort(
         key=lambda item: str(item.get("updated_at") or ""),

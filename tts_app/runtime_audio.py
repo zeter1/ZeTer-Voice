@@ -295,6 +295,9 @@ def validate_final_mp3(
     path: Path,
     expected_duration_sec: float,
     cancel_event: threading.Event | None = None,
+    *,
+    channels: int = 0,
+    sample_rate_hz: int = 0,
 ) -> dict:
     if cancel_event is None:
         cancel_event = threading.Event()
@@ -314,6 +317,10 @@ def validate_final_mp3(
         return result
     if codec.casefold() != "mp3":
         result["fatal_error"] = "Проверка готового файла обнаружила неожиданный кодек: " + codec
+        return result
+    if ((channels and result.get("channels") != channels)
+            or (sample_rate_hz and sample_rate != sample_rate_hz)):
+        result["fatal_error"] = "Количество каналов или частота дискретизации MP3 не совпадает с настройками."
         return result
 
     decoded, returncode = _decode_audio_samples(ffmpeg, path, cancel_event)

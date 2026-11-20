@@ -38,6 +38,47 @@ class VoiceTests(unittest.TestCase):
         self.assertIsNone(catalog.voice_spec('Microsoft Irina Desktop'))
         self.assertIsNone(catalog.voice_spec('Silero — неизвестный'))
 
+    def test_catalog_only_offers_engine_voices_while_available(self):
+        catalog = self.catalog()
+        with tempfile.TemporaryDirectory(dir=ROOT) as tmp:
+            root = Path(tmp)
+            model = root / 'модель.pt'
+            edge = root / 'private_edge'
+            model_bytes = b'verified local model'
+            digest = hashlib.sha256(model_bytes).hexdigest()
+            with patch.object(catalog, 'MODEL_PATH', model), patch.object(catalog, 'EDGE_RUNTIME', edge), \
+                 patch.object(catalog, 'MODEL_SHA256', digest), \
+                 patch.object(catalog, 'verified_model', wraps=catalog.verified_model) as verify, \
+                 patch.object(catalog, 'torch_available', return_value=False) as torch:
+                available = catalog.available_extra_voice_names
+                self.assertEqual(available(), [])
+                model.write_bytes(model_bytes)
+                self.assertEqual(available(), [])
+                torch.return_value = True
+                (edge / 'edge_tts').mkdir(parents=True)
+                (edge / 'edge_tts' / '__init__.py').write_bytes(b'# fixture')
+                self.assertEqual(available(), catalog.extra_voice_names())
+                (edge / 'edge_tts' / '__init__.py').unlink()
+                self.assertEqual(available(), catalog.extra_voice_names()[:5])
+                self.assertEqual(verify.call_count, 1)
+                model.write_bytes(b'broken local model')
+                self.assertEqual(available(), [])
+
+    def test_torch_probe_uses_synthesis_interpreter_and_worker_paths(self):
+        catalog = self.catalog()
+        optional = ROOT / 'Движки речи' / 'optional_dependencies'
+        executable = str(ROOT / 'engine_runtime' / 'python.exe')
+        environment = {'PYTHONNOUSERSITE': '1'}
+        with patch.object(catalog, 'engine_python', return_value=executable), \
+             patch.object(catalog, 'engine_environment', return_value=environment), \
+             patch.object(catalog.subprocess, 'run') as run:
+            run.return_value.returncode = 0
+            self.assertTrue(catalog.torch_available(optional))
+            arguments = run.call_args.args[0]
+            self.assertEqual(arguments[0], executable)
+            self.assertEqual(arguments[-2:], [str(ROOT / 'tts_app'), str(optional)])
+            self.assertEqual(run.call_args.kwargs['env'], environment)
+
     def test_model_is_checked_without_importing_torch(self):
         catalog = self.catalog()
         with tempfile.TemporaryDirectory(dir=ROOT) as tmp:
@@ -56,12 +97,14 @@ class VoiceTests(unittest.TestCase):
         audio = importlib.import_module('tts_app.app_audio_settings')
         events = importlib.import_module('queue').Queue()
         app = types.SimpleNamespace(events=events, current_tab=lambda: None)
-        with patch.object(audio, 'get_sapi_voices', side_effect=RuntimeError('synthetic SAPI unavailable')):
+        installed = catalog.extra_voice_names()[-2:]
+        with (patch.object(audio, 'get_sapi_voices', side_effect=RuntimeError('synthetic SAPI unavailable')),
+              patch.object(audio, 'available_extra_voice_names', return_value=installed)):
             audio.AppAudioSettingsMixin._load_voices_async(app)
             first = events.get(timeout=2)
             second = events.get(timeout=2)
-        self.assertEqual(first, ('', 'voices_loaded', catalog.extra_voice_names()))
-        self.assertEqual(second[1], 'voices_error')
+        self.assertEqual(first, ('1', 'voices_loaded', installed))
+        self.assertEqual(second[:2], ('1', 'voices_error'))
 
     def test_missing_model_never_downloads(self):
         catalog = self.catalog()

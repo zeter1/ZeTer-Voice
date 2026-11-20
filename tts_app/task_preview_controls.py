@@ -16,9 +16,7 @@ class TaskPreviewControlsMixin:
 
         self.preview_pause_event.set()
         self.preview_is_paused = True
-        self.pause_preview_button.configure(state="disabled")
-        self.resume_preview_button.configure(state="normal")
-        self.stop_preview_button.configure(state="normal")
+        self._set_playback_controls("paused")
 
         # Save a safe sentence-level checkpoint immediately. The SAPI worker
         # then refines it to the current word and saves again.
@@ -134,9 +132,7 @@ class TaskPreviewControlsMixin:
             self.preview_pause_event.clear()
 
             self.preview_is_paused = False
-            self.pause_preview_button.configure(state="disabled")
-            self.resume_preview_button.configure(state="disabled")
-            self.stop_preview_button.configure(state="disabled")
+            self._set_playback_controls("busy")
             self.status_var.set(
                 "Возвращаюсь на одно предложение назад…"
             )
@@ -156,11 +152,11 @@ class TaskPreviewControlsMixin:
             return
 
     def apply_preview_state(self, state: str) -> None:
+        if self.preview_stop_event.is_set():
+            return
         if state == "paused":
             self.preview_is_paused = True
-            self.pause_preview_button.configure(state="disabled")
-            self.resume_preview_button.configure(state="normal")
-            self.stop_preview_button.configure(state="normal")
+            self._set_playback_controls("paused")
             current = self.current_preview_segment_text
             self.status_var.set(
                 f"Пауза: {current}" if current else "Пауза."
@@ -168,8 +164,7 @@ class TaskPreviewControlsMixin:
 
         elif state == "running":
             self.preview_is_paused = False
-            self.pause_preview_button.configure(state="normal")
-            self.resume_preview_button.configure(state="disabled")
+            self._set_playback_controls("running")
 
     def stop_preview(
         self,
@@ -235,13 +230,12 @@ class TaskPreviewControlsMixin:
             )
             self.preview_stop_event.set()
             self.preview_pause_event.clear()
+            self._set_playback_controls("busy")
             self.status_var.set("Останавливаю воспроизведение…")
         elif not preserve_bookmark:
             self.clear_preview_highlight()
             self.preview_is_paused = False
-            self.pause_preview_button.configure(state="disabled")
-            self.resume_preview_button.configure(state="disabled")
-            self.stop_preview_button.configure(state="disabled")
+            self._set_playback_controls("idle")
             if not self.conversion_running():
                 self.status_var.set("Готово к работе.")
 
@@ -263,14 +257,9 @@ class TaskPreviewControlsMixin:
 
         self.preview_pause_event.clear()
         self.current_preview_run_id = None
-        self.preview_button.configure(state="normal")
-        self.preview_cursor_button.configure(state="normal")
-        self.pause_preview_button.configure(state="disabled")
 
         if keep_bookmark:
             self.preview_is_paused = True
-            self.resume_preview_button.configure(state="normal")
-            self.stop_preview_button.configure(state="normal")
             self._restore_preview_bookmark_ui()
         else:
             if not stopped:
@@ -281,8 +270,7 @@ class TaskPreviewControlsMixin:
             self.clear_preview_highlight()
             self.preview_is_paused = False
             self.current_preview_segment_text = ""
-            self.resume_preview_button.configure(state="disabled")
-            self.stop_preview_button.configure(state="disabled")
+            self._set_playback_controls("idle")
             if not self.conversion_running():
                 self.status_var.set("Готово к работе.")
 

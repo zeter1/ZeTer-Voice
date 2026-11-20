@@ -17,7 +17,7 @@ def windows_autostart_command() -> str:
         arguments = [str(Path(sys.executable).resolve())]
     else:
         try:
-            script_path = app_code_dir() / "text_to_mp3.py"
+            script_path = app_code_dir() / "ZeTer Voice.py"
         except NameError:
             script_path = Path(sys.argv[0]).resolve()
 

@@ -20,9 +20,16 @@ class TaskUiStatusMixin:
         if not modified:
             return
 
+        previous_metrics = getattr(self, "_text_metrics_cache", None)
         self.text_box.edit_modified(False)
-        self._text_changed_performance()
         self.workspace_dirty = True
+        self._text_changed_performance()
+        if (previous_metrics and previous_metrics["chars"]
+                and self.text_box.compare("end-1c", "==", "1.0")):
+            self.app.logger.event(
+                "workspace_text_emptied", task_id=self.task_id, tab_id=self.workspace_id,
+                stage="editor_change", previous_chars=previous_metrics["chars"],
+            )
 
         if (
             self.preview_thread

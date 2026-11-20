@@ -91,7 +91,18 @@ Cleanup делает Resume при паузе; если был Stop, незав�
 
 `LastHResult=0x80045009` — SAPI `SPERR_NO_DRIVER`: проблема драйвера/endpoint в Windows; приложение сохраняет неподтверждённый текст и сообщает код, но не может починить драйвер или автоматически выбрать другой вывод вместо сохранённого. Для других аудио-кодов 0x80045006–0x80045008 предусмотрена аналогичная подсказка.
 
-Для `global_copy_capture_rejected` сверить `reason`, PID и время захвата. `capture_busy` означает, что ещё идёт копирование для другой вкладки или прежнего нажатия. `clipboard_superseded` означает, что копирования перекрылись или версия буфера сменилась перед чтением. `clipboard_owner_changed` означает другой процесс-владелец. `clipboard_timeout` означает, что готовый текст не получен в отведённое время. В `global_copy_text_captured` остаются число символов и короткий хеш. Содержимое буфера в журнал не передаётся.
+### Добавление текста и восстановление вкладок
+
+Для `global_copy_capture_rejected`, `global_copy_duplicate_skipped` и `global_copy_text_captured` сверяйте `capture_id` в пределах сессии, `capture_protocol=2`, `reason` и `capture_stage`. Отказ сохранён в `recent_signals` и в событиях. Поля `source_process`, PID источника и владельца буфера, `clipboard_notified`, `clipboard_sequence_changed`, `read_attempts` и задержки помогают различить этап.
+
+- `dispatch` или `send_input` указывают, где остановилась отправка команды. `send_input_accepted=true` подтверждает приём команды Windows.
+- `waiting_clipboard` означает ожидание обновления буфера. После отправки доступно до трёх секунд. Если программа увидела признак обновления от того же источника, чтение может получить до 1,5 секунды с первого такого признака.
+- `clipboard_open_busy` означает, что Windows не дала открыть буфер. `reading_unicode` означает, что запрос данных уже начался. Изменение владельца и перекрытие с другим копированием имеют отдельные причины отказа.
+- `append_text` означает отказ вкладки принять уже прочитанный текст. `appended` означает успешную вставку с числом символов и `append_ms`.
+- `text_paste_rejected` различает проверку редактора, чтение буфера и вставку для кнопки и Ctrl+V.
+- `workspace_saved_on_close` подтверждает запись списка вкладок и актуального текста. `workspace_restored` показывает число вкладок, символов и непрочитанных файлов. `workspace_text_emptied` фиксирует переход ранее измеренного текста к пустому редактору. `workspace_text_archive_failed` и `text_backup_cleanup` показывают сбои архива и итоги очистки.
+
+Содержимое выделения, буфера и вставки не включается в эти события. В старых сессиях `clipboard_needs_manual_copy` означал блокировку по процессу-источнику после тайм-аута.
 
 ## Размер и шум
 
@@ -112,7 +123,7 @@ Event/error/init/close и live-summary write failure выключает осно
 ## Privacy / data safety
 
 - Полный исходный пользовательский текст не является routine log payload.
-- `failed_chunk` сохраняется только bounded-фрагментом и только при конкретной ошибке.
+- `failed_chunk` содержит только количество символов. Копии текста для MP3 хранятся в папке `Текст`.
 - Очевидные credential keys (`token`, `password`, `secret`, `authorization`, cookies/API keys) редактируются до записи.
 - Длинные строки/коллекции ограничиваются; для длинных строк сохраняется длина и short hash.
 - Пути внутри каталога программы и home могут нормализоваться до `<APP_DIR>` / `<HOME>`.
@@ -127,6 +138,6 @@ Event/error/init/close и live-summary write failure выключает осно
 python tools/verify.py
 ```
 
-Gate запускать в source mirror: импорты вычисляют storage от `__file__` и создают `.write_test`; новый cwd или TEMP не изолируют пользовательские данные. Копировать только `text_to_mp3.py`, `tts_app/*.py`, `tools/*.py`, без runtime/user data. Generated indexes после принятого gate переносить из зеркала, не редактировать вручную.
+Gate запускать в source mirror: импорты вычисляют storage от `__file__` и создают `.write_test`; новый cwd или TEMP не изолируют пользовательские данные. Копировать только `ZeTer Voice.py`, `tts_app/*.py`, `tools/*.py`, без runtime/user data. Generated indexes после принятого gate переносить из зеркала, не редактировать вручную.
 
 В gate входят `tools/test_logging_compact.py` (dedup/grouping/redaction, critical events после budget, error classification, event/summary write failure, emergency/collision) и `tools/test_ui_diagnostics.py` (снимки зависания, приватность, uncaught hooks, огромные строки), `tools/test_preview_audio.py` (failed async без acknowledgement, healthy/partial/Stop, повторный stream ID без audio delta, UI guard, COM lifetime и exception queue). Эти тесты используют свои synthetic source mirrors и fake COM; реальный GUI/SAPI/устройство/EXE ими не проверяется.

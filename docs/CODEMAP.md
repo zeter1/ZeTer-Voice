@@ -23,7 +23,7 @@
 | SAPI voices/devices/synthesize WAV | `tts_app/sapi_core.py` | `runtime_core.py` |
 | дополнительные голоса, hash/путь модели | `tts_app/voice_catalog.py` | `docs/VOICE_ENGINES.md` |
 | private Python source/EXE для worker/installer | `tts_app/engine_runtime.py` | `build_support/prepare_engine_runtime.py` |
-| верхняя вкладка установки/удаления движков | `tts_app/engine_manager_ui.py` | `app_workspace_init.py`, `app_shutdown.py` |
+| вкладка установки и удаления движков в настройках | `tts_app/engine_manager_ui.py` | `mp3_settings_ui.py`, `app_shutdown.py` |
 | additive установка / восстановимое удаление | `tts_app/engine_installation.py` | `tools/manage_voice_engine.py`, `voice_catalog.py` |
 | Silero/Edge worker и отменяемый синтез WAV | `tts_app/voice_worker.py`, `tts_app/voice_process.py` | `tools/setup_voices.py` |
 | прослушивание Silero/Edge через SAPI SpeakStream | `tts_app/generated_preview.py` | `sapi_preview_diagnostics.py`, `voice_process.py` |
@@ -34,12 +34,18 @@
 | hotkey config/parse/enable/duplicate state | `tts_app/windows_hotkey_config.py` | `windows_hotkeys.py` composition |
 | общий захват Unicode из Windows Clipboard, ожидающая операция и доставка в Tk | `tts_app/windows_hotkey_capture.py` | hotkey config |
 | Windows low-level keyboard hook и SendInput | `tts_app/windows_hotkey_hook.py` | hotkey capture |
-| закрываемые вкладки notebook | `tts_app/widgets.py` | — |
-| создание UI одной task-вкладки | `tts_app/task_ui_build.py` | `task_ui_state.py` |
+| строка текстовых вкладок, закрытие и кнопка «+» | `tts_app/widgets.py` | `app_tabs.py` |
+| белая тема окон и элементов Tk | `tts_app/workspace_theme.py` | `app_workspace_init.py` |
+| вкладка «О программе» и контакты | `tts_app/about_ui.py` | `app_workspace_init.py` |
+| вкладка «Настройки», параметры MP3 и переключатель автозапуска | `tts_app/mp3_settings_ui.py` | `mp3_format.py`, `task_conversion_controls.py`, `app_recovery.py` |
+| редактор, панель чтения и MP3 | `tts_app/task_ui_build.py` | `task_ui_state.py` |
+| боковая панель голоса, звука и захвата текста | `tts_app/task_ui_sidebar.py` | `app_audio_settings.py`, `app_hotkeys.py` |
 | counters/queue/text-state/delete logging | `tts_app/task_ui_status.py` | — |
 | voice/title/workspace record/task UI state | `tts_app/task_ui_state.py` | — |
 | MP3 source snapshot/completion tracking | `tts_app/task_source_tracking.py` | — |
 | global selection + clipboard paste | `tts_app/task_capture.py` | `windows_hotkey_capture.py` |
+| размещение текста и перенос из прежних папок | `tts_app/runtime_storage.py` | `app_workspace_init.py` |
+| архивирование прежнего текста и очистка по сроку | `tts_app/workspace_text_history.py` | `app_workspace_save.py`, `app_workspace_init.py` |
 | загрузить файл / очистить / получить весь текст | `tts_app/task_file_io.py` | `sapi_core.py` для read_text_file |
 | preview bookmark/selection/start state | `tts_app/task_preview_state.py` | `text_processing.py` |
 | preview worker/start/done | `tts_app/task_preview_player.py` | `sapi_preview.py` |

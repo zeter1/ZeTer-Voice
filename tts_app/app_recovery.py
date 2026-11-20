@@ -16,38 +16,59 @@ class AppRecoveryMixin:
     ) -> None:
         raw_dir = str(manifest.get("_job_dir") or "").strip()
         work_dir = Path(raw_dir) if raw_dir else None
+        if (
+            work_dir is None
+            or not work_dir.name.startswith("job_")
+            or work_dir.resolve().parent != RECOVERY_DIR.resolve()
+            or work_dir.is_symlink() or work_dir.is_junction()
+        ):
+            return
         try:
-            if (
-                work_dir is not None
-                and work_dir.exists()
-                and work_dir.name.startswith("job_")
-                and work_dir.resolve().parent
-                == RECOVERY_DIR.resolve()
-            ):
-                shutil.rmtree(
-                    work_dir,
-                    ignore_errors=True,
-                )
-        finally:
-            self.logger.event(
-                "recovery_job_discarded",
-                run_id=manifest.get("run_id"),
-                tab_id=manifest.get("tab_id"),
-                workspace_id=manifest.get("workspace_id"),
-                reason=reason,
+            shutil.rmtree(work_dir)
+        except OSError as exc:
+            self.logger.event("recovery_job_discard_failed", run_id=manifest.get("run_id"),
+                              exception_type=type(exc).__name__)
+            messagebox.showerror(
+                APP_TITLE, "Не удалось полностью удалить папку восстановления. Проверьте доступ к файлам.",
+                parent=self.root,
             )
+            return
+        self.logger.event(
+            "recovery_job_discarded",
+            run_id=manifest.get("run_id"),
+            tab_id=manifest.get("tab_id"),
+            workspace_id=manifest.get("workspace_id"),
+            reason=reason,
+        )
 
     def _offer_recovery_jobs(self) -> None:
         if self.shutdown_in_progress:
             return
 
-        jobs, removed = scan_recovery_jobs()
-        if removed:
-            self.logger.event(
-                "recovery_cleanup",
-                removed_dirs=removed,
-                retention_days=RECOVERY_RETENTION_DAYS,
-            )
+        while not self.shutdown_in_progress:
+            deferred = []
+            try:
+                jobs, removed = scan_recovery_jobs(deferred=deferred)
+            except OSError:
+                jobs, removed = [], 0
+                deferred.append(RECOVERY_DIR)
+            if removed:
+                self.logger.event(
+                    "recovery_cleanup", removed_dirs=removed, retention_days=RECOVERY_RETENTION_DAYS,
+                )
+            if not deferred:
+                break
+            self.logger.event("recovery_scan_deferred", folders_count=len(deferred))
+            if not messagebox.askretrycancel(
+                APP_TITLE,
+                f"Не удалось полностью проверить папки восстановления MP3: {len(deferred)}.\n\n"
+                "Проверьте, не заняты ли файлы и есть ли доступ к папке «Незавершённые задачи», "
+                "затем повторите проверку. «Отмена» отложит проверку этих папок до следующего запуска.",
+                parent=self.root,
+            ):
+                break
+        else:
+            return
 
         if not jobs:
             return

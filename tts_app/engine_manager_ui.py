@@ -1,5 +1,4 @@
-"""Persistent top-level engine page. Background work reports through a Tk-owned queue."""
-from pathlib import Path
+"""Persistent engine settings page. Background work reports through a Tk-owned queue."""
 import json
 import queue
 import subprocess
@@ -24,33 +23,65 @@ def audio_active(app) -> bool:
                for task in app.tabs.values())
 
 
+def _stop_owned_process(process) -> tuple[bool, bool]:
+    """Report whether the tree stop and the root process exit were confirmed."""
+    windows = sys.platform == 'win32'
+    tree_stopped = not windows
+    try:
+        if windows:
+            result = subprocess.run(['taskkill', '/PID', str(process.pid), '/T', '/F'],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                timeout=4, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+            tree_stopped = result.returncode == 0
+        else:
+            process.terminate()
+        if tree_stopped:
+            process.wait(timeout=2)
+            return True, True
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    # Reap the exact process even if the tree command fails. This cannot prove
+    # that an installer child left behind by a failed tree command exited.
+    try:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=2)
+    except (OSError, subprocess.TimeoutExpired):
+        return tree_stopped, False
+    return tree_stopped, True
+
+
 class EngineManager:
     def __init__(self, app, parent):
         self.app = app
         self.root = app.root
-        self.frame = ttk.Frame(parent, padding=18)
+        self.frame = ttk.Frame(parent, padding=14)
         self.messages = queue.Queue()
         self.stop = threading.Event()
         self.busy = False
         self.closed = False
         self.thread = None
+        self.pending_process = None
+        self.tree_stop_unconfirmed = False
         self.after_id = None
+        self.status_generation = 0
         self.statuses = {}
         self.buttons = []
-        ttk.Label(self.frame, text='Голосовые движки', font=('Segoe UI', 16, 'bold')).pack(anchor='w')
-        ttk.Label(self.frame, text='Устанавливайте недостающие движки или удаляйте их из программы.\n'
-                  'Установленные компоненты не обновляются и не заменяются автоматически.',
-                  wraplength=720).pack(anchor='w', pady=(8, 16))
-        for engine, title, detail in [
+        ttk.Label(self.frame, text='Установленные компоненты не обновляются автоматически.',
+                  wraplength=720).pack(anchor='w', pady=(0, 10))
+        cards = ttk.Frame(self.frame)
+        cards.pack(fill='x', pady=(0, 8))
+        cards.columnconfigure((0, 1), weight=1, uniform='engine_cards')
+        for column, (engine, title, detail) in enumerate([
             ('silero', 'Silero · 5 русских голосов', 'Без интернета после установки. Модель около 148 МБ; при отсутствии PyTorch потребуется дополнительная загрузка.'),
             ('edge', 'Microsoft Edge · Светлана и Дмитрий', 'Нужен интернет. При озвучке текст передаётся Microsoft. Устанавливается отдельная копия для этой программы.'),
-        ]:
-            card = ttk.LabelFrame(self.frame, text=title, padding=12)
-            card.pack(fill='x', pady=(0, 12))
-            ttk.Label(card, text=detail, wraplength=650).pack(anchor='w')
+        ]):
+            card = ttk.LabelFrame(cards, text=title, padding=10)
+            card.grid(row=0, column=column, sticky='nsew', padx=(0, 10) if column == 0 else 0)
+            ttk.Label(card, text=detail, wraplength=350).pack(anchor='w')
             value = tk.StringVar(value='Проверяю…')
             self.statuses[engine] = value
-            ttk.Label(card, textvariable=value).pack(anchor='w', pady=6)
+            ttk.Label(card, textvariable=value, wraplength=350).pack(anchor='w', pady=6)
             row = ttk.Frame(card)
             row.pack(anchor='w')
             for action, label in [('install', 'Установить'), ('remove', 'Удалить')]:
@@ -60,12 +91,14 @@ class EngineManager:
         ttk.Label(self.frame, text='Windows SAPI и сторонние системные голоса остаются без изменений.\n'
                   'При удалении сохраняется резервная копия. Ваши тексты, MP3 и настройки не удаляются.',
                   wraplength=720).pack(anchor='w', pady=4)
+        controls = ttk.Frame(self.frame)
+        controls.pack(fill='x', pady=(4, 0))
+        self.cancel = ttk.Button(controls, text='Отменить операцию', command=self.stop.set, state='disabled')
+        self.cancel.pack(side='left')
+        self.progress = ttk.Progressbar(controls, mode='indeterminate')
+        self.progress.pack(side='left', fill='x', expand=True, padx=(12, 0))
         self.message = tk.StringVar(value='')
-        ttk.Label(self.frame, textvariable=self.message, wraplength=720).pack(anchor='w', pady=10)
-        self.progress = ttk.Progressbar(self.frame, mode='indeterminate')
-        self.progress.pack(fill='x')
-        self.cancel = ttk.Button(self.frame, text='Отменить операцию', command=self.stop.set, state='disabled')
-        self.cancel.pack(anchor='w', pady=8)
+        ttk.Label(self.frame, textvariable=self.message, wraplength=720).pack(anchor='w', pady=(6, 0))
         self.frame.bind('<Destroy>', self._destroyed, add='+')
         self.refresh()
         self.after_id = self.root.after(100, self.poll)
@@ -75,16 +108,20 @@ class EngineManager:
             self.close()
 
     def refresh(self):
+        self.status_generation += 1
+        generation = self.status_generation
+
         def inspect():
             try:
                 result = {engine: engine_status(engine) for engine in ('silero', 'edge')}
             except Exception:
                 result = {engine: 'Не удалось проверить файлы' for engine in ('silero', 'edge')}
-            self.messages.put(('status', result))
+            self.messages.put(('status', (generation, result)))
         threading.Thread(target=inspect, daemon=True, name='engine-status').start()
 
     def start(self, action, engine):
-        if self.closed or self.busy or getattr(self.app, 'shutdown_in_progress', False):
+        if (self.closed or self.busy or self.tree_stop_unconfirmed or self.pending_process is not None
+                or getattr(self.app, 'shutdown_in_progress', False)):
             return
         if audio_active(self.app):
             messagebox.showinfo('Голосовые движки', 'Сначала остановите прослушивание и создание MP3.', parent=self.root)
@@ -94,7 +131,8 @@ class EngineManager:
                 'Windows-голоса, настройки и ваши тексты останутся без изменений.', parent=self.root, default='no'):
             return
         # A confirmation dialog runs a nested event loop: hotkeys/close may have run.
-        if self.closed or self.busy or getattr(self.app, 'shutdown_in_progress', False) or audio_active(self.app):
+        if (self.closed or self.busy or self.tree_stop_unconfirmed or self.pending_process is not None
+                or getattr(self.app, 'shutdown_in_progress', False) or audio_active(self.app)):
             return
         self.busy = True
         self.stop.clear()
@@ -108,6 +146,7 @@ class EngineManager:
 
     def run(self, action, engine):
         process = None
+        stop_reason = None
         result = 'Операция не завершена. Проверьте интернет и доступ к папке программы.'
         try:
             script = program_root() / 'tools' / 'manage_voice_engine.py'
@@ -117,28 +156,50 @@ class EngineManager:
                     creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
                 deadline = time.monotonic() + 1800
                 while process.poll() is None:
-                    if self.stop.wait(0.05) or time.monotonic() >= deadline:
+                    if self.stop.wait(0.05):
+                        stop_reason = 'cancelled'
                         break
-                if process.poll() is None:
-                    if sys.platform == 'win32':
-                        subprocess.run(['taskkill', '/PID', str(process.pid), '/T', '/F'],
-                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                            timeout=5, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-                    else:
-                        process.terminate()
-                    process.wait(timeout=5)
-                    result = 'Операция остановлена. Успевшие установиться компоненты сохранены; состояние обновлено.'
-                else:
+                    if time.monotonic() >= deadline:
+                        stop_reason = 'timeout'
+                        break
+                if process.poll() is not None:
                     output.seek(0)
                     payload = json.loads(output.read(4096))
-                    result = str(payload['message'])[:1000]
+                    if payload['ok'] is (process.returncode == 0) and isinstance(payload['message'], str):
+                        result = payload['message'][:1000]
         except Exception:
             pass
         finally:
-            if process is not None and process.poll() is None:
-                process.kill()
-                process.wait(timeout=3)
-            self.messages.put(('done', result))
+            pending_process = None
+            tree_stop_unconfirmed = False
+            try:
+                if process is not None and process.poll() is None:
+                    tree_stopped, process_exited = _stop_owned_process(process)
+                    tree_stop_unconfirmed = not tree_stopped
+                    if not process_exited:
+                        pending_process = process
+                    elif stop_reason == 'cancelled':
+                        result = 'Операция остановлена. Успевшие установиться компоненты сохранены.'
+                    elif stop_reason == 'timeout':
+                        result = 'Время операции истекло. Успевшие установиться компоненты сохранены.'
+            except Exception:
+                pending_process = process
+                tree_stop_unconfirmed = process is not None
+            finally:
+                if tree_stop_unconfirmed:
+                    result = ('Не удалось подтвердить остановку дерева процессов. '
+                              'Установка и удаление заблокированы в текущем сеансе.')
+                elif pending_process is not None:
+                    result = ('Не удалось подтвердить остановку процесса установки. '
+                              'Управление будет доступно после его выхода.')
+                self.messages.put(('done', (result, pending_process, tree_stop_unconfirmed)))
+
+    def _refresh_after_operation(self):
+        if not self.tree_stop_unconfirmed:
+            for button in self.buttons:
+                button.configure(state='normal')
+        self.refresh()
+        self.app._load_voices_async()
 
     def poll(self):
         self.after_id = None
@@ -150,16 +211,26 @@ class EngineManager:
             except queue.Empty:
                 break
             if kind == 'status':
-                for engine, value in payload.items():
-                    self.statuses[engine].set(value)
+                generation, statuses = payload
+                if generation == self.status_generation:
+                    for engine, value in statuses.items():
+                        self.statuses[engine].set(value)
             elif kind == 'done':
+                message, self.pending_process, self.tree_stop_unconfirmed = payload
                 self.busy = False
-                self.message.set(payload)
+                self.message.set(message)
                 self.progress.stop()
                 self.cancel.configure(state='disabled')
-                for button in self.buttons:
-                    button.configure(state='normal')
-                self.refresh()
+                if self.pending_process is None:
+                    self._refresh_after_operation()
+        if self.pending_process is not None:
+            try:
+                exited = self.pending_process.poll() is not None
+            except OSError:
+                exited = False
+            if exited:
+                self.pending_process = None
+                self._refresh_after_operation()
         self.after_id = self.root.after(100, self.poll)
 
     def close(self):

@@ -50,6 +50,10 @@ class ProblemLoggerInsightsMixin:
                 "Есть неудачные попытки глобального копирования: "
                 f"{int(stats.get('global_copy_failures') or 0)}."
             )
+        if stats["text_paste_failures"]:
+            warnings.append(
+                f"Отклонено вставок из буфера: {stats['text_paste_failures']}."
+            )
 
         unresolved_recovery = max(
             0,

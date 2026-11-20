@@ -8,7 +8,13 @@ import time
 from ctypes import wintypes
 from pathlib import PureWindowsPath
 
-from .runtime import CLIPBOARD_COPY_TIMEOUT_SEC, CLIPBOARD_POLL_INTERVAL_MS, tk
+from .runtime import (
+    CLIPBOARD_COPY_TIMEOUT_SEC,
+    CLIPBOARD_DISPATCH_TIMEOUT_SEC,
+    CLIPBOARD_POLL_INTERVAL_MS,
+    CLIPBOARD_READ_TIMEOUT_SEC,
+    tk,
+)
 from .windows_hotkey_hook import WM_COPY_SELECTION, WindowsHotkeyHookMixin
 
 
@@ -30,7 +36,7 @@ class WindowsCopyCapture(WindowsHotkeyHookMixin):
         self._lock = threading.Lock()
         self._registrations = ()
         self._pending = None
-        self._unresolved = {}
+        self._capture_id = 0
         self._events = queue.SimpleQueue()
         self._stop_event = threading.Event()
         self._hook_ready_event = threading.Event()
@@ -96,6 +102,7 @@ class WindowsCopyCapture(WindowsHotkeyHookMixin):
                     break
                 if monitor.enabled and monitor._binding_generation == info["binding_generation"]:
                     info["source_process"] = self._process_name_from_pid(info["source_pid"])
+                    info["delivery_ms"] = round((time.perf_counter() - info.pop("queued_perf")) * 1000, 1)
                     monitor.callback(info)
             else:
                 delay = 1
@@ -105,27 +112,21 @@ class WindowsCopyCapture(WindowsHotkeyHookMixin):
 
     def _report(self, monitor, context, *, reason=None, sequence=None, text=None):
         if monitor is not None:
+            now = time.perf_counter()
             self._events.put((monitor, {
                 **context,
                 "capture_rejected": reason,
                 "clipboard_sequence_after": sequence,
                 "clipboard_changed": text is not None,
                 "captured_text": text,
-                "copy_latency_ms": round((time.perf_counter() - context["trigger_perf"]) * 1000, 1),
+                "queued_perf": now,
+                "copy_latency_ms": round((now - context["trigger_perf"]) * 1000, 1),
             }))
 
-    def _abandon_pending(self, reason, *, unresolved=True):
+    def _abandon_pending(self, reason):
         pending = self._pending
         self._pending = None
-        context = pending["context"]
-        if unresolved and pending["sent"]:
-            self._mark_unresolved(context["source_pid"], self._clipboard_sequence_number()
-                                  or context["clipboard_sequence_before"])
-        self._report(pending["monitor"], context, reason=reason)
-
-    def _mark_unresolved(self, pid, baseline):
-        _, count = self._unresolved.get(pid, (baseline, 0))
-        self._unresolved[pid] = baseline, count + 1
+        self._report(pending["monitor"], pending["context"], reason=reason)
 
     def _request_capture(self, vk, modifiers, *, native, repeat=False):
         if self._stop_event.is_set():
@@ -152,6 +153,11 @@ class WindowsCopyCapture(WindowsHotkeyHookMixin):
                     return False
             if monitor is not None:
                 context["binding_generation"] = monitor._binding_generation
+                self._capture_id += 1
+                context.update(
+                    capture_id=self._capture_id, capture_protocol=2, capture_stage="trigger",
+                    copy_kind="native_ctrl_c" if native else "injected_ctrl_c",
+                )
             if not pid or not context["source_hwnd"] or not before:
                 self._report(monitor, context, reason="source_unavailable")
                 return monitor is not None and not native
@@ -164,33 +170,35 @@ class WindowsCopyCapture(WindowsHotkeyHookMixin):
                         self._abandon_pending("selection_may_have_changed")
                     self._report(monitor, context, reason="capture_busy")
                     return True
-                self._abandon_pending("clipboard_superseded")
                 # The two physical copy attempts can complete in either order.
-                self._mark_unresolved(pid, before)
+                self._abandon_pending("clipboard_superseded")
                 self._report(monitor, context, reason="clipboard_superseded")
-            elif pid in self._unresolved:
-                self._report(monitor, context, reason="clipboard_needs_manual_copy")
             else:
                 # Unassigned native Ctrl+C can still race a later custom chord.
                 # Observe its metadata only. Never read its text.
+                timeout = CLIPBOARD_COPY_TIMEOUT_SEC if native else CLIPBOARD_DISPATCH_TIMEOUT_SEC
+                context["capture_stage"] = "waiting_clipboard" if native else "dispatch"
                 self._pending = {
                     "monitor": monitor,
                     "context": context,
                     "sent": native,
                     "sending": False,
                     "clipboard_notified": False,
-                    "deadline": context["trigger_perf"] + CLIPBOARD_COPY_TIMEOUT_SEC,
+                    "deadline": context["trigger_perf"] + timeout,
                 }
                 send_copy = not native
 
         if send_copy:
-            self._wake_keyboard()
+            if not self._wake_keyboard():
+                with self._lock:
+                    if self._pending is not None and self._pending["context"] is context:
+                        self._abandon_pending("clipboard_dispatch_failed")
         else:
             self._wake_reader()
         return monitor is not None and not native
 
     def _wake_keyboard(self):
-        ctypes.windll.user32.PostThreadMessageW(self._thread_id, WM_COPY_SELECTION, 0, 0)
+        return bool(ctypes.windll.user32.PostThreadMessageW(self._thread_id, WM_COPY_SELECTION, 0, 0))
 
     def _send_pending_copy(self):
         # Called outside LowLevelKeyboardProc on the same keyboard thread.
@@ -203,20 +211,29 @@ class WindowsCopyCapture(WindowsHotkeyHookMixin):
                 return
             context = pending["context"]
             foreground = self._foreground_capture_context()
-            keys = ("source_hwnd", "source_pid", "source_focus", "clipboard_sequence_before")
+            keys = ("source_hwnd", "source_pid", "source_focus")
             if any(context[key] != foreground[key] for key in keys):
                 self._abandon_pending("source_window_changed")
                 return
+            if context["clipboard_sequence_before"] != foreground["clipboard_sequence_before"]:
+                self._abandon_pending("clipboard_superseded")
+                return
             pending["sent"] = True
             pending["sending"] = True
+            context["capture_stage"] = "send_input"
         sent = self._send_ctrl_c_to_active_window()
         with self._lock:
             if self._pending is not pending:
                 return
             pending["sending"] = False
+            context["send_input_accepted"] = sent
             if not sent:
                 self._abandon_pending("clipboard_send_failed")
                 return
+            now = time.perf_counter()
+            context["dispatch_ms"] = round((now - context["trigger_perf"]) * 1000, 1)
+            context["capture_stage"] = "waiting_clipboard"
+            pending["deadline"] = now + CLIPBOARD_COPY_TIMEOUT_SEC
         self._wake_reader()
 
     def _wait_for_clipboard_change(self, *, clipboard_notification=False):
@@ -225,23 +242,14 @@ class WindowsCopyCapture(WindowsHotkeyHookMixin):
         with self._lock:
             pending = self._pending
             if pending is None:
-                if self._unresolved:
-                    sequence = self._clipboard_sequence_number()
-                    owner = self._clipboard_owner_pid()
-                    if owner in self._unresolved:
-                        baseline, count = self._unresolved[owner]
-                        if (sequence not in (None, 0, baseline)
-                                and self._clipboard_sequence_number() == sequence):
-                            if count == 1:
-                                del self._unresolved[owner]
-                            else:
-                                self._unresolved[owner] = sequence, count - 1
                 return
-            if time.perf_counter() >= pending["deadline"]:
+            now = time.perf_counter()
+            if now >= pending["deadline"]:
                 self._abandon_pending("clipboard_timeout")
                 return
             context = pending["context"]
             pending["clipboard_notified"] |= clipboard_notification
+            context["clipboard_notified"] = pending["clipboard_notified"]
             if not pending["sent"] or pending["sending"]:
                 return
             sequence = self._clipboard_sequence_number()
@@ -253,13 +261,27 @@ class WindowsCopyCapture(WindowsHotkeyHookMixin):
                 return
             if sequence == before and not pending["clipboard_notified"]:
                 return
+            owner = self._clipboard_owner_pid()
+            context["clipboard_owner_pid"] = owner
+            context["clipboard_sequence_changed"] = bool(sequence and sequence != before)
+            if owner == context["source_pid"] and "clipboard_update_ms" not in context:
+                context["clipboard_update_ms"] = round((now - context["trigger_perf"]) * 1000, 1)
+                # Give an observed response time to render or unlock its Unicode format.
+                pending["deadline"] = max(pending["deadline"], now + CLIPBOARD_READ_TIMEOUT_SEC)
             observed = pending.setdefault("observed_sequence", sequence)
             if observed != before and observed != sequence:
                 self._abandon_pending("clipboard_superseded")
                 return
             pending["observed_sequence"] = sequence
+            context["capture_stage"] = "opening_clipboard"
+            context["read_attempts"] = context.get("read_attempts", 0) + 1
 
-        result = self._read_unicode_snapshot(context, observed_sequence=sequence)
+        def progress(stage, **fields):
+            with self._lock:
+                if self._pending is pending:
+                    context.update(capture_stage=stage, **fields)
+
+        result = self._read_unicode_snapshot(context, observed_sequence=sequence, progress=progress)
         if result is None:
             return
         sequence, captured, reason = result
@@ -267,14 +289,14 @@ class WindowsCopyCapture(WindowsHotkeyHookMixin):
             if self._pending is not pending:
                 return
             if time.perf_counter() >= pending["deadline"]:
-                self._abandon_pending("clipboard_timeout", unresolved=False)
+                self._abandon_pending("clipboard_timeout")
                 return
             if reason:
-                self._abandon_pending(reason, unresolved=reason in {
-                    "clipboard_owner_changed", "clipboard_superseded",
-                })
+                self._abandon_pending(reason)
                 return
             self._pending = None
+            context["capture_stage"] = "snapshot_ready"
+            context["clipboard_sequence_changed"] = True
             self._report(pending["monitor"], context, sequence=sequence, text=captured)
 
     @staticmethod
@@ -335,20 +357,28 @@ class WindowsCopyCapture(WindowsHotkeyHookMixin):
             "trigger_perf": time.perf_counter(),
         }
 
-    def _read_unicode_snapshot(self, context, *, observed_sequence):
+    def _read_unicode_snapshot(self, context, *, observed_sequence, progress=None):
         user32, kernel32 = ctypes.windll.user32, ctypes.windll.kernel32
         before = context["clipboard_sequence_before"]
         if not user32.OpenClipboard(self._reader_hwnd):
+            if progress is not None:
+                progress("clipboard_open_busy")
             return None
         try:
             sequence = self._clipboard_sequence_number()
             owner = self._clipboard_owner_pid()
+            if progress is not None:
+                progress("checking_clipboard", clipboard_owner_pid=owner)
             if sequence != observed_sequence:
                 return sequence, None, "clipboard_superseded"
             if owner != context["source_pid"]:
                 return (sequence, None, "clipboard_owner_changed") if sequence != before else None
             if not user32.IsClipboardFormatAvailable(13):  # CF_UNICODETEXT
+                if progress is not None:
+                    progress("checking_clipboard", clipboard_unicode_available=False)
                 return (sequence, None, "clipboard_empty") if sequence != before else None
+            if progress is not None:
+                progress("reading_unicode", clipboard_unicode_available=True)
             handle = user32.GetClipboardData(13)
             # A delayed-rendering owner may advance the sequence during GetClipboardData.
             sequence = self._clipboard_sequence_number()

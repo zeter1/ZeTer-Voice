@@ -97,6 +97,8 @@ class ProblemLoggerEventsMixin:
                 self.stats["global_copy_failures"] += 1
             elif event_type == "global_copy_duplicate_skipped":
                 self.stats["global_copy_duplicates_skipped"] += 1
+            elif event_type == "text_paste_rejected":
+                self.stats["text_paste_failures"] += 1
             elif event_type == "preview_read_text_deleted_batch":
                 self.stats["read_deleted_batches"] += 1
                 self.stats["read_deleted_segments"] += int(
@@ -183,9 +185,14 @@ class ProblemLoggerEventsMixin:
                 "recovery_job_deferred",
                 "recovery_jobs_found",
                 "global_copy_capture_rejected",
+                "text_paste_rejected",
                 "global_copy_clipboard_timeout",
                 "global_copy_clipboard_read_failed",
                 "workspace_tab_file_delete_failed",
+                "workspace_text_archive_failed",
+                "workspace_text_emptied",
+                "workspace_saved_on_close",
+                "workspace_restored",
                 "workspace_save_lock_recovered",
                 "ui_stall_recovered",
                 "ui_operation_slow",
@@ -306,6 +313,7 @@ class ProblemLoggerEventsMixin:
             if event_type in {
                 "global_copy_text_captured",
                 "global_copy_capture_rejected",
+                "text_paste_rejected",
                 "global_copy_clipboard_timeout",
                 "global_copy_clipboard_read_failed",
                 "global_copy_duplicate_skipped",
@@ -522,18 +530,7 @@ class ProblemLoggerEventsMixin:
             }
 
             if failed_chunk:
-                failed_text = str(failed_chunk)
-                failed_path = self.errors_dir / f"{error_id}_failed_chunk.txt"
-                excerpt = failed_text[: min(DEFAULT_CHUNK_SIZE + 200, 2800)]
-                failed_path.write_text(excerpt, encoding="utf-8")
-                payload["failed_chunk"] = {
-                    "file": failed_path.name,
-                    "chars": len(failed_text),
-                    "saved_chars": len(excerpt),
-                    "sha256_16": hashlib.sha256(
-                        failed_text.encode("utf-8", errors="replace")
-                    ).hexdigest()[:16],
-                }
+                payload["failed_chunk"] = {"chars": len(failed_chunk)}
 
             write_log_json(json_path, payload)
             self.error_records[fingerprint] = payload

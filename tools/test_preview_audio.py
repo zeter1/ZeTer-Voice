@@ -271,7 +271,6 @@ class PreviewTests(unittest.TestCase):
     def test_worker_queue_exception_has_text_trace_but_no_live_frames(self):
         variable = types.SimpleNamespace(get=lambda: "Fake", set=lambda value: None)
         number = types.SimpleNamespace(get=lambda: 0)
-        button = types.SimpleNamespace(configure=lambda **kwargs: None)
         tab = types.SimpleNamespace(
             preview_thread=None, voice_var=variable, audio_output_var=variable,
             rate_var=number, pitch_var=number, volume_var=number,
@@ -281,8 +280,7 @@ class PreviewTests(unittest.TestCase):
             _text_offset_from_index=lambda index: 0, _full_text=lambda: "Unread",
             clear_saved_preview_bookmark=lambda **kwargs: None,
             clear_preview_highlight=lambda: None, log_text_state=lambda *args, **kwargs: None,
-            preview_button=button, preview_cursor_button=button, pause_preview_button=button,
-            resume_preview_button=button, stop_preview_button=button, status_var=variable,
+            _set_playback_controls=lambda mode: None, status_var=variable,
             task_id="test-task", workspace_id="test-tab",
             app=types.SimpleNamespace(stop_other_previews=lambda task: None, events=queue.Queue(),
                                       logger=types.SimpleNamespace(event=lambda *args, **kwargs: None)),
@@ -431,10 +429,22 @@ class HotkeyCaptureTests(unittest.TestCase):
         tab.status_var.set = status = Mock()
         AppHotkeysMixin._on_tab_copy_hotkey(app, "capture-tab", {
             "capture_rejected": "clipboard_timeout", "captured_text": None,
+            "capture_id": 7, "capture_stage": "clipboard_open_busy",
+            "read_attempts": 3, "source_process": "fixture.exe", "source_hwnd": 123,
+            "untrusted_clipboard_field": "DO_NOT_LOG_THIS",
         })
         self.assertEqual(appended, [])
         self.assertFalse(any(name == "global_copy_text_captured" for name, _ in events))
-        self.assertIn("Ctrl+C", status.call_args.args[0])
+        self.assertIn("нажмите горячую клавишу ещё раз", status.call_args.args[0])
+        name, evidence = events[-1]
+        self.assertEqual(name, "global_copy_capture_rejected")
+        self.assertEqual(evidence["capture_id"], 7)
+        self.assertEqual(evidence["capture_stage"], "clipboard_open_busy")
+        self.assertEqual(evidence["read_attempts"], 3)
+        self.assertEqual(evidence["source_process"], "fixture.exe")
+        self.assertNotIn("source_hwnd", evidence)
+        self.assertNotIn("captured_text", evidence)
+        self.assertNotIn("DO_NOT_LOG_THIS", repr(evidence))
 
 if __name__ == "__main__":
     try:

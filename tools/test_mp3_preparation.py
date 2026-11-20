@@ -5,6 +5,7 @@ from threading import Event, get_ident
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 import sys
+from tempfile import TemporaryDirectory
 import unittest
 import tkinter as tk
 
@@ -21,6 +22,7 @@ class TestMp3Preparation(unittest.TestCase):
         task.text_box = tk.Text(root)
         task.text_box.insert("1.0", "Текст до выбора имени. 🧪")
         task.app = SimpleNamespace(
+            settings={"bitrate": "128k", "mp3_channels": 2, "mp3_sample_rate_hz": 44100},
             output_is_used_by_other_task=Mock(return_value=False),
             visible_tab_index=Mock(return_value=1),
             shutdown_in_progress=False, logger=Mock(), log_ui_error=Mock(), events=Queue(),
@@ -33,15 +35,13 @@ class TestMp3Preparation(unittest.TestCase):
         task.voice_var = tk.StringVar(root, "Synthetic")
         task.rate_var = task.pitch_var = tk.IntVar(root, 0)
         task.volume_var = tk.IntVar(root, 100)
-        task.bitrate_var = tk.StringVar(root, "96k")
         task.tab_title = Mock(return_value="Synthetic")
         task.mp3_source_sha256 = "synthetic-hash"
         task.track_mp3_source_snapshot = Mock(return_value=True)
         task.discard_mp3_source_snapshot = Mock()
         task.stop_preview = Mock()
         task.progress = {}
-        task.start_button = Mock()
-        task.cancel_button = Mock()
+        task._set_mp3_controls = Mock()
         task.status_var = tk.StringVar(root)
         task._job_worker = Mock()
         self.enterContext(patch.object(controls, "mp3_target_identity", return_value=None))
@@ -52,6 +52,21 @@ class TestMp3Preparation(unittest.TestCase):
             return Path("synthetic.mp3")
 
         task.ask_output_path = Mock(side_effect=choose_output)
+
+    def test_save_dialog_prefers_default_folder_and_falls_back_when_it_is_missing(self):
+        with TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            preferred = base / "Папка по умолчанию"
+            last = base / "Последняя папка"
+            preferred.mkdir()
+            last.mkdir()
+            self.task.app.settings.update(mp3_output_dir=str(preferred), last_output_dir=str(last))
+            with patch.object(controls.filedialog, "asksaveasfilename", return_value="") as dialog:
+                self.assertIsNone(controls.TaskConversionControlsMixin.ask_output_path(self.task))
+                self.assertEqual(dialog.call_args.kwargs["initialdir"], str(preferred))
+                self.task.app.settings["mp3_output_dir"] = str(base / "Папка недоступна")
+                self.assertIsNone(controls.TaskConversionControlsMixin.ask_output_path(self.task))
+                self.assertEqual(dialog.call_args.kwargs["initialdir"], str(last))
 
     def test_backup_and_preparation_use_immutable_snapshot_off_tk(self):
         started, release = Event(), Event()
@@ -80,6 +95,9 @@ class TestMp3Preparation(unittest.TestCase):
         self.assertFalse(self.task.worker.is_alive())
         self.assertEqual(backed_up[0][1], originals)
         self.assertEqual(self.task._job_worker.call_args.args[1], originals)
+        self.assertEqual(self.task._job_worker.call_args.args[10], "128k")
+        self.assertEqual(self.task._job_worker.call_args.kwargs["channels"], 2)
+        self.assertEqual(self.task._job_worker.call_args.kwargs["sample_rate_hz"], 44100)
         self.assertEqual(self.task.current_mp3_text_backup_path, backup_path)
 
     def test_failed_backup_does_not_start_synthesis_or_change_text(self):

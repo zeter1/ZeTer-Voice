@@ -39,6 +39,19 @@ class AppShutdownMixin:
                 parent=self.root,
             )
             return
+        self.logger.event("workspace_saved_on_close", tabs=len(self.tabs), status=status)
+
+        if not self.save_settings():
+            close_without_settings = messagebox.askyesno(
+                APP_TITLE,
+                "Вкладки сохранены, но не удалось записать настройки. "
+                "Выберите «Нет», чтобы оставить окно открытым и повторить сохранение.\n\n"
+                "Закрыть программу без сохранения настроек?",
+                icon=messagebox.WARNING, default=messagebox.NO, parent=self.root,
+            )
+            if not close_without_settings:
+                self.shutdown_in_progress = False
+                return
 
         if status == "forced_shutdown":
             self.logger.event(
@@ -49,6 +62,10 @@ class AppShutdownMixin:
         manager = getattr(self, "engine_manager", None)
         if manager:
             manager.close()
+        cleanup_id = getattr(self, "_text_backup_cleanup_id", None)
+        if cleanup_id:
+            self.root.after_cancel(cleanup_id)
+            self._text_backup_cleanup_id = None
 
         for workspace_id in list(
             self.tab_hotkey_monitors
@@ -58,10 +75,6 @@ class AppShutdownMixin:
             )
         GlobalCopyHotkeyMonitor.stop_shared(self.root)
 
-        try:
-            self.save_settings()
-        except Exception:
-            pass
         self.ui_watchdog.stop()
         self.logger.close(status=status)
         self.exception_hooks.uninstall()
@@ -207,5 +220,4 @@ class AppShutdownMixin:
         # The final save still checks the text and metadata before closing.
         if self._workspace_write is None:
             self.save_workspace()
-        self.save_settings()
         self.root.after(100, self._poll_shutdown)

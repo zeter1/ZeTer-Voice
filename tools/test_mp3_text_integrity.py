@@ -73,6 +73,58 @@ class Conversion(worker.TaskConversionWorkerMixin):
 
 
 class MP3TextIntegrityTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "requires Windows sharing modes")
+    def test_locked_recovery_manifest_preserves_every_checkpoint(self):
+        import win32con
+        import win32file
+
+        with tempfile.TemporaryDirectory() as temporary, patch.object(
+            runtime_recovery, "RECOVERY_DIR", Path(temporary),
+        ):
+            job = Path(temporary) / "job_locked"
+            job.mkdir()
+            manifest = job / "recovery.json"
+            manifest.write_text(json.dumps({
+                "run_id": "locked", "text_sha256": "fixture", "chunks_total": 1, "completed_chunks": 1,
+                "output_path": str(job / "audio.mp3"),
+            }), encoding="utf-8")
+            source = job / "source_text.txt"
+            source.write_text("fixture", encoding="utf-8")
+            checkpoint = job / "chunk_00001.wav"
+            write_tone(checkpoint, 440)
+            before = {p: p.read_bytes() for p in (manifest, source, checkpoint)}
+            handle = win32file.CreateFile(str(manifest), win32con.GENERIC_READ, 0,
+                                          None, win32con.OPEN_EXISTING, 0, None)
+            try:
+                with self.assertRaises(PermissionError):
+                    manifest.read_bytes()
+                self.assertEqual(runtime_recovery.scan_recovery_jobs(), ([], 0))
+            finally:
+                handle.Close()
+            self.assertEqual({p: p.read_bytes() for p in before}, before)
+            jobs, removed = runtime_recovery.scan_recovery_jobs()
+            self.assertEqual((jobs[0]["run_id"], removed), ("locked", 0))
+            self.assertEqual(runtime_recovery.count_valid_recovery_wavs(job, 1, cleanup_stale=False)[0], 1)
+
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "requires local FFmpeg and ffprobe")
+    def test_selected_mp3_format_matches_encoded_stream(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            wave_path = root / "fixture.wav"
+            write_tone(wave_path, 410)
+            for bitrate, channels, rate in (("128k", 2, 44100), ("160k", 1, 48000), ("64k", 2, 32000)):
+                with self.subTest(bitrate=bitrate, channels=channels, rate=rate):
+                    candidate = root / "output.mp3"
+                    ffmpeg = shutil.which("ffmpeg")
+                    worker.run_ffmpeg_concat(
+                        ffmpeg, [wave_path], candidate, bitrate, root,
+                        channels=channels, sample_rate_hz=rate,
+                    )
+                    info = runtime_audio.validate_final_mp3(ffmpeg, candidate, 0.25)
+                    self.assertTrue(info["validated"])
+                    self.assertEqual((info["channels"], info["sample_rate_hz"], info["bit_rate_bps"]),
+                                     (channels, rate, int(bitrate[:-1]) * 1000))
+
     @unittest.skipUnless(os.name == "nt" and shutil.which("ffmpeg"), "requires Windows and local FFmpeg")
     def test_publication_keeps_external_recording_replaced_after_precheck(self):
         with tempfile.TemporaryDirectory() as temporary:

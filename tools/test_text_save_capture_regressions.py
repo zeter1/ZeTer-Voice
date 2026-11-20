@@ -155,7 +155,7 @@ class CaptureRegressions(unittest.TestCase):
             "clipboard_sequence_before": self.sequence, "trigger_perf": time.perf_counter(),
         }
         self.snapshot = None
-        self.service._read_unicode_snapshot = lambda context, observed_sequence: self.snapshot
+        self.service._read_unicode_snapshot = lambda context, observed_sequence, **kwargs: self.snapshot
         self.results = []
 
     def register(self, hotkey):
@@ -214,15 +214,16 @@ class CaptureRegressions(unittest.TestCase):
         self.service._send_pending_copy()
         self.assertFalse(self.request(ord("C"), native=True))
         self.snapshot_update("Чей результат неизвестно")
+        self.snapshot_update("Вторая незавершённая копия")
         self.assertTrue(self.request(0x77))
         self.service._send_pending_copy()
-        self.snapshot_update("Вторая незавершённая копия")
+        self.snapshot_update("Новое выделение")
         self.assertEqual(self.delivered(), [
             ("F8", None, "clipboard_superseded"),
             ("Ctrl+C", None, "clipboard_superseded"),
-            ("F8", None, "clipboard_needs_manual_copy"),
+            ("F8", "Новое выделение", None),
         ])
-        self.service._send_ctrl_c_to_active_window.assert_called_once()
+        self.assertEqual(self.service._send_ctrl_c_to_active_window.call_count, 2)
 
     def test_unassigned_native_copy_does_not_satisfy_custom_capture(self):
         self.register("F8")
@@ -249,30 +250,104 @@ class CaptureRegressions(unittest.TestCase):
         self.snapshot_update("Содержимое заменили во время блокировки")
         self.assertEqual(self.delivered()[-1], ("Ctrl+C", None, "clipboard_superseded"))
 
-    def test_late_update_after_timeout_is_not_sent_to_the_second_tab(self):
+    def test_hotkey_starts_fresh_after_timeout_without_manual_copy(self):
+        self.register("F8")
+        self.request(0x77)
+        self.service._send_pending_copy()
+        self.service._pending["deadline"] = 0
+        self.service._wait_for_clipboard_change()
+        self.request(0x77)
+        self.service._send_pending_copy()
+        self.service._wait_for_clipboard_change()
+        self.assertEqual(self.delivered(), [("F8", None, "clipboard_timeout")])
+        self.snapshot_update("Новое выделение")
+        self.assertEqual(self.delivered()[-1], ("F8", "Новое выделение", None))
+        self.assertEqual(self.service._send_ctrl_c_to_active_window.call_count, 2)
+
+    def test_slow_source_gets_full_response_window_after_send(self):
+        self.register("F8")
+        now = time.perf_counter()
+        with patch("tts_app.windows_hotkey_capture.time.perf_counter", return_value=now) as clock:
+            self.request(0x77)
+            clock.return_value = now + 0.5
+            self.service._send_pending_copy()
+            clock.return_value = now + 2.5
+            self.snapshot_update("Медленный ответ")
+            self.assertEqual(self.delivered(), [("F8", "Медленный ответ", None)])
+            evidence = self.results[0][1]
+            self.assertEqual(evidence["capture_stage"], "snapshot_ready")
+            self.assertEqual(evidence["dispatch_ms"], 500)
+            self.assertEqual(evidence["clipboard_update_ms"], 2500)
+        self.service._send_ctrl_c_to_active_window.assert_called_once()
+
+    def test_confirmed_clipboard_update_can_finish_reading_after_response_deadline(self):
+        self.register("F8")
+        now = time.perf_counter()
+        with patch("tts_app.windows_hotkey_capture.time.perf_counter", return_value=now) as clock:
+            self.request(0x77)
+            self.service._send_pending_copy()
+            clock.return_value = now + 2.9
+            self.sequence += 1
+            self.service._wait_for_clipboard_change()
+            clock.return_value = now + 3.3
+            self.snapshot = self.sequence, "Текст после освобождения буфера", None
+            self.service._wait_for_clipboard_change()
+            self.assertEqual(self.delivered(), [("F8", "Текст после освобождения буфера", None)])
+            self.assertEqual(self.results[0][1]["read_attempts"], 2)
+
+    def test_timeout_evidence_distinguishes_dispatch_and_source_response(self):
+        self.register("F8")
+        self.request(0x77)
+        self.service._pending["deadline"] = 0
+        self.delivered()
+        self.request(0x77)
+        self.service._send_pending_copy()
+        self.service._pending["deadline"] = 0
+        self.delivered()
+        self.assertEqual([info["capture_stage"] for _, info in self.results],
+                         ["dispatch", "waiting_clipboard"])
+        self.assertEqual([info["capture_id"] for _, info in self.results], [1, 2])
+        self.assertNotIn("dispatch_ms", self.results[0][1])
+        self.assertIn("dispatch_ms", self.results[1][1])
+
+    def test_failed_windows_message_does_not_wait_for_clipboard(self):
+        self.register("F8")
+        self.service._wake_keyboard.return_value = False
+        self.assertTrue(self.request(0x77))
+        self.assertIsNone(self.service._pending)
+        self.assertEqual(self.delivered(), [("F8", None, "clipboard_dispatch_failed")])
+        self.assertEqual(self.results[0][1]["capture_stage"], "dispatch")
+        self.service._send_ctrl_c_to_active_window.assert_not_called()
+
+    def test_update_after_timeout_while_idle_is_not_sent_to_another_tab(self):
         self.register("F8")
         self.register("F9")
         self.request(0x77)
         self.service._send_pending_copy()
         self.service._pending["deadline"] = 0
         self.service._wait_for_clipboard_change()
-        self.request(0x78)
-        self.service._send_pending_copy()
         self.snapshot_update("Просроченный текст")
-        self.assertEqual(self.delivered(), [
-            ("F8", None, "clipboard_timeout"),
-            ("F9", None, "clipboard_needs_manual_copy"),
-        ])
-        self.service._send_ctrl_c_to_active_window.assert_called_once()
         self.request(0x78)
         self.service._send_pending_copy()
+        self.service._wait_for_clipboard_change()
+        self.assertEqual(self.delivered(), [("F8", None, "clipboard_timeout")])
         self.snapshot_update("Новый текст")
         self.assertEqual(self.delivered()[-1], ("F9", "Новый текст", None))
+
+    def test_unassigned_manual_copy_timeout_does_not_block_f8(self):
+        self.register("F8")
+        self.assertFalse(self.request(ord("C"), native=True))
+        self.service._pending["deadline"] = 0
+        self.assertTrue(self.request(0x77))
+        self.service._send_pending_copy()
+        self.snapshot_update("Выделение после пустого Ctrl+C")
+        self.assertEqual(self.delivered(), [("F8", "Выделение после пустого Ctrl+C", None)])
 
     def test_tk_times_out_during_delayed_render_and_drops_late_result(self):
         started, release = Event(), Event()
 
-        def blocked_read(context, observed_sequence):
+        def blocked_read(context, observed_sequence, *, progress):
+            progress("reading_unicode")
             started.set()
             if not release.wait(2):
                 return None
@@ -293,6 +368,7 @@ class CaptureRegressions(unittest.TestCase):
             worker.join(2)
         self.assertFalse(worker.is_alive())
         self.assertEqual(self.delivered(), [("Ctrl+C", None, "clipboard_timeout")])
+        self.assertEqual(self.results[0][1]["capture_stage"], "reading_unicode")
 
     def test_foreground_change_aborts_copy_and_binding_replacement_drops_old_snapshot(self):
         monitor = self.register("F8")
