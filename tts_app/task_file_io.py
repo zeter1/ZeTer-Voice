@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .i18n import tr
+
 from .runtime import *
 from .problem_logger import ProblemLogger
 from .text_processing import *
@@ -15,7 +17,7 @@ class TaskFileIoMixin:
         if self.current_preview_run_id or self.current_run_id:
             messagebox.showwarning(
                 APP_TITLE,
-                "Сначала остановите чтение или создание MP3 в этой вкладке.",
+                tr("Сначала остановите чтение или создание MP3 в этой вкладке."),
                 parent=self.frame.winfo_toplevel(),
             )
             return False
@@ -31,10 +33,10 @@ class TaskFileIoMixin:
 
         path = filedialog.askopenfilename(
             parent=self.frame.winfo_toplevel(),
-            title="Выберите текстовый файл",
+            title=tr("Выберите текстовый файл"),
             filetypes=[
-                ("Текстовые файлы", ("*.txt", "*.md")),
-                ("Все файлы", "*.*"),
+                (tr("Текстовые файлы"), ("*.txt", "*.md")),
+                (tr("Все файлы"), "*.*"),
             ],
             **kwargs,
         )
@@ -54,7 +56,7 @@ class TaskFileIoMixin:
             )
             messagebox.showerror(
                 APP_TITLE,
-                f"Не удалось прочитать файл:\n{exc}",
+                tr("Не удалось прочитать файл:\n{0}", exc),
             )
             return
 
@@ -79,7 +81,7 @@ class TaskFileIoMixin:
         self.set_tab_title(src.stem, custom=True)
         self.app.renumber_default_tabs()
         self.status_var.set(
-            f"Загружено: {src.name} — {len(text):,} символов.".replace(",", " ")
+            tr("Загружено: {0} — {1:,} символов.", src.name, len(text)).replace(",", " ")
         )
         self.app.schedule_settings_save(self)
         self.app.schedule_workspace_save()
@@ -88,7 +90,7 @@ class TaskFileIoMixin:
         if self.worker and self.worker.is_alive():
             messagebox.showwarning(
                 APP_TITLE,
-                "Нельзя очистить текст, пока эта вкладка создаёт MP3.",
+                tr("Нельзя очистить текст, пока эта вкладка создаёт MP3."),
             )
             return
 
@@ -105,7 +107,7 @@ class TaskFileIoMixin:
         self.text_box.delete("1.0", "end")
         self._text_metrics_cache = None
         self.workspace_dirty = True
-        self.status_var.set("Текст очищен.")
+        self.status_var.set(tr("Текст очищен."))
         self.schedule_queue_status_refresh()
         self.log_text_state(
             "clear_text",

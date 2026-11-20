@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .i18n import tr
+
 import bisect
 import ctypes
 import hashlib
@@ -208,23 +210,23 @@ def format_eta(seconds: float | int | None) -> str:
         return ""
 
     if total < 60:
-        return f"~{total} сек"
+        return tr("~{0} сек", total)
 
     minutes, sec = divmod(total, 60)
     if minutes < 60:
-        return f"~{minutes} мин {sec:02d} сек"
+        return tr("~{0} мин {1:02d} сек", minutes, sec)
 
     hours, minutes = divmod(minutes, 60)
-    return f"~{hours} ч {minutes:02d} мин"
+    return tr("~{0} ч {1:02d} мин", hours, minutes)
 
 
 def format_bytes(value: int | float | None) -> str:
     try:
         size = max(0.0, float(value))
     except Exception:
-        return "неизвестно"
+        return tr("неизвестно")
 
-    units = ("Б", "КБ", "МБ", "ГБ", "ТБ")
+    units = (tr("Б"), tr("КБ"), tr("МБ"), tr("ГБ"), tr("ТБ"))
     unit_index = 0
     while size >= 1024.0 and unit_index < len(units) - 1:
         size /= 1024.0

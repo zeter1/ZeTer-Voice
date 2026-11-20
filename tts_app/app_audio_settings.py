@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .i18n import tr
+
 from .voice_catalog import available_extra_voice_names
 
 from .runtime import *
@@ -18,7 +20,7 @@ class AppAudioSettingsMixin:
         generation = str(self._voice_load_generation)
         current = self.current_tab()
         if current:
-            current.status_var.set(VOICES_LOADING_STATUS)
+            current.status_var.set(tr(VOICES_LOADING_STATUS))
 
         def worker() -> None:
             voices = []
@@ -62,7 +64,7 @@ class AppAudioSettingsMixin:
             exc=exc, traceback_text=payload["traceback"], context={},
         )
         if kind == "voices_error" and not self.shutdown_in_progress:
-            messagebox.showerror(APP_TITLE, f"Не удалось получить список SAPI-голосов.\n\n{exc}")
+            messagebox.showerror(APP_TITLE, tr("Не удалось получить список SAPI-голосов.\n\n{0}", exc))
 
     def _load_audio_outputs_async(self) -> None:
         # Only one SAPI enumeration worker at a time. Bluetooth reconnection
@@ -217,7 +219,7 @@ class AppAudioSettingsMixin:
             )
             messagebox.showerror(
                 APP_TITLE,
-                f"Не удалось открыть папку:\n{path}\n\n{exc}",
+                tr("Не удалось открыть папку:\n{0}\n\n{1}", path, exc),
             )
 
     def _on_global_rate_changed(self, *_args) -> None:
@@ -393,8 +395,8 @@ class AppAudioSettingsMixin:
                 self._settings_save_failure_reported = True
                 messagebox.showerror(
                     APP_TITLE,
-                    "Не удалось записать настройки. Проверьте доступ к папке настроек. "
-                    "Программа попробует сохранить их при следующем изменении или закрытии.",
+                    tr("Не удалось записать настройки. Проверьте доступ к папке настроек. "
+                    "Программа попробует сохранить их при следующем изменении или закрытии."),
                     parent=self.root,
                 )
             return False

@@ -1,7 +1,29 @@
 from __future__ import annotations
 
+from .i18n import tr
+
 from .runtime import *
 from .text_processing import *
+
+class AudioOutputUnavailableError(RuntimeError):
+    _message = (
+        'Устройство воспроизведения "{0}" сейчас не найдено '
+        "в Windows SAPI. Подключите устройство и нажмите «↻ Обновить»."
+    )
+
+    def __init__(self, description: str) -> None:
+        self.description = description
+        super().__init__(self._message.format(description))
+
+    def display_message(self) -> str:
+        return tr(self._message, self.description)
+
+
+def audio_error_message(error: BaseException) -> str:
+    if isinstance(error, AudioOutputUnavailableError):
+        return error.display_message()
+    return tr(str(error))
+
 
 def read_text_file(path: Path) -> str:
     data = path.read_bytes()
@@ -214,10 +236,7 @@ def set_audio_output_by_description(sp_voice, description: str) -> str:
         available,
     )
     if resolved is None:
-        raise RuntimeError(
-            f'Устройство воспроизведения "{description}" сейчас не найдено '
-            "в Windows SAPI. Подключите устройство и нажмите «↻ Обновить»."
-        )
+        raise AudioOutputUnavailableError(description)
 
     token = token_by_description[resolved]
     sp_voice.AudioOutput = token

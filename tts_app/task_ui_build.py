@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .i18n import tr
+
 from .runtime import *
 from .problem_logger import ProblemLogger
 from .text_processing import *
@@ -129,12 +131,12 @@ class TaskUiBuildMixin(TaskUiSidebarMixin):
             value=restored_copy_hotkey
         )
         self.copy_hotkey_status_var = tk.StringVar(
-            value="Горячая клавиша не назначена."
+            value=tr("Горячая клавиша не назначена.")
         )
         self.applied_copy_hotkey = TAB_HOTKEY_NONE_LABEL
 
-        self.status_var = tk.StringVar(value="Готово к работе.")
-        self.queue_status_var = tk.StringVar(value="Очередь: считаю…")
+        self.status_var = tk.StringVar(value=tr("Готово к работе."))
+        self.queue_status_var = tk.StringVar(value=tr("Очередь: считаю…"))
         self.rate_value_var = tk.StringVar(value=str(self.rate_var.get()))
         self.pitch_value_var = tk.StringVar(value=str(self.pitch_var.get()))
 
@@ -145,7 +147,7 @@ class TaskUiBuildMixin(TaskUiSidebarMixin):
         self._manual_wrap_large_line = False
         self._word_wrap_var = tk.BooleanVar(value=True)
         self.custom_title = bool(custom_title)
-        self.restored_title = restored_title or f"Вкладка {number}"
+        self.restored_title = restored_title or tr("Вкладка {0}", number)
 
         self._build_ui()
 
@@ -194,16 +196,19 @@ class TaskUiBuildMixin(TaskUiSidebarMixin):
         status.grid(row=1, column=0, sticky="ew", pady=(8, 0))
         status.columnconfigure(0, weight=1)
         ttk.Label(status, textvariable=self.status_var, style="Note.TLabel", width=1).grid(row=0, column=0, sticky="ew")
-        self.edge_privacy_note = ttk.Label(status, text="Edge передаёт текст Microsoft", style="Note.TLabel")
+        self.edge_privacy_note = ttk.Label(status, text=tr("Edge передаёт текст Microsoft"), style="Note.TLabel")
         self.edge_privacy_note.grid(row=0, column=1, padx=(8, 0))
         self.sidebar_hotkey_hint = ttk.Frame(status)
         self.sidebar_hotkey_hint.grid(row=0, column=2, padx=(8, 10))
-        ttk.Label(self.sidebar_hotkey_hint, text="Захват:", style="Note.TLabel").pack(side="left")
-        self.sidebar_hotkey = ttk.Label(self.sidebar_hotkey_hint, textvariable=self.copy_hotkey_var, style="Note.TLabel", width=10)
-        self.sidebar_hotkey.pack(side="left", padx=(4, 0))
+        ttk.Label(self.sidebar_hotkey_hint, text=tr("Захват:"), style="Note.TLabel").pack(side="left")
         self.sidebar_button = ttk.Button(status, command=self._toggle_sidebar)
         self.sidebar_button.grid(row=0, column=3)
         self._build_sidebar()
+        self.sidebar_hotkey = ttk.Label(
+            self.sidebar_hotkey_hint, textvariable=self.copy_hotkey_combo.display,
+            style="Note.TLabel", width=10,
+        )
+        self.sidebar_hotkey.pack(side="left", padx=(4, 0))
         self._show_sidebar(True)
         body.bind("<Configure>", self._resize_sidebar, add="+")
 
@@ -216,15 +221,15 @@ class TaskUiBuildMixin(TaskUiSidebarMixin):
         header = ttk.Frame(editor, style="Paper.TFrame")
         header.grid(row=0, column=0, sticky="ew", padx=16, pady=11)
         header.columnconfigure(0, weight=1)
-        ttk.Label(header, text="Текст для озвучивания", style="Heading.Card.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Button(header, text="⎘  Вставить текст", command=self.paste_text_from_clipboard).grid(row=0, column=1, padx=(8, 6))
+        ttk.Label(header, text=tr("Текст для озвучивания"), style="Heading.Card.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Button(header, text=tr("⎘  Вставить текст"), command=self.paste_text_from_clipboard).grid(row=0, column=1, padx=(8, 6))
         menu_button = ttk.Menubutton(header, text="⋯", width=3, style="Compact.TMenubutton")
         menu_button.grid(row=0, column=2)
         self.editor_menu = tk.Menu(menu_button, tearoff=False)
-        self.editor_menu.add_command(label="Начать чтение заново", command=self.start_preview)
+        self.editor_menu.add_command(label=tr("Начать чтение заново"), command=self.start_preview)
         self.editor_menu.add_separator()
-        self.editor_menu.add_command(label="Открыть текстовый файл…", command=self.load_file)
-        self.editor_menu.add_command(label="Очистить текст", command=self.clear_text)
+        self.editor_menu.add_command(label=tr("Открыть текстовый файл…"), command=self.load_file)
+        self.editor_menu.add_command(label=tr("Очистить текст"), command=self.clear_text)
         menu_button.configure(menu=self.editor_menu)
         ttk.Separator(editor).grid(row=1, column=0, sticky="ew")
 
@@ -266,7 +271,7 @@ class TaskUiBuildMixin(TaskUiSidebarMixin):
         footer.columnconfigure(0, weight=1)
         ttk.Label(footer, textvariable=self.queue_status_var, style="Note.Card.TLabel", width=1).grid(row=0, column=0, sticky="ew")
         ttk.Checkbutton(
-            footer, text="Перенос строк", style="Card.TCheckbutton",
+            footer, text=tr("Перенос строк"), style="Card.TCheckbutton",
             variable=self._word_wrap_var, command=self._on_word_wrap_changed,
         ).grid(row=0, column=1, padx=(8, 0))
 
@@ -283,27 +288,27 @@ class TaskUiBuildMixin(TaskUiSidebarMixin):
         bar.columnconfigure(3, weight=1)
         self.preview_button = ttk.Button(bar, style="Primary.TButton", width=13)
         self.preview_button.grid(row=0, column=0, padx=(0, 8))
-        self.preview_cursor_button = ttk.Button(bar, text="Читать с курсора", command=self.start_preview_from_cursor)
+        self.preview_cursor_button = ttk.Button(bar, text=tr("Читать с курсора"), command=self.start_preview_from_cursor)
         self.preview_cursor_button.grid(row=0, column=1, padx=(0, 8))
-        self.stop_preview_button = ttk.Button(bar, text="■  Остановить", command=self.stop_preview)
+        self.stop_preview_button = ttk.Button(bar, text=tr("■  Остановить"), command=self.stop_preview)
         self.stop_preview_button.grid(row=0, column=2)
 
-        self.start_button = ttk.Button(bar, text="↓  Создать MP3", command=self.start_job)
+        self.start_button = ttk.Button(bar, text=tr("↓  Создать MP3"), command=self.start_job)
         self.start_button.grid(row=0, column=5, padx=(7, 0))
         self.progress = ttk.Progressbar(bar, maximum=100, mode="determinate", length=130)
         self.progress.grid(row=0, column=4, padx=(8, 0))
-        self.cancel_button = ttk.Button(bar, text="Отменить MP3", command=self.cancel_job)
+        self.cancel_button = ttk.Button(bar, text=tr("Отменить MP3"), command=self.cancel_job)
         self.cancel_button.grid(row=0, column=5, padx=(8, 0))
         self._set_mp3_controls(active=False)
         self._set_playback_controls("idle")
 
     def _set_playback_controls(self, mode: str) -> None:
         text, action = {
-            "idle": ("▶ Читать", self.start_preview),
-            "running": ("Пауза", self.pause_preview),
-            "paused": ("Продолжить", self.resume_preview),
-            "saved": ("Продолжить", self.resume_preview),
-            "busy": ("Подождите…", self.start_preview),
+            "idle": (tr("▶ Читать"), self.start_preview),
+            "running": (tr("Пауза"), self.pause_preview),
+            "paused": (tr("Продолжить"), self.resume_preview),
+            "saved": (tr("Продолжить"), self.resume_preview),
+            "busy": (tr("Подождите…"), self.start_preview),
         }[mode]
         self.preview_button.configure(text=text, command=action, state="disabled" if mode == "busy" else "normal")
         self.preview_cursor_button.configure(state="normal" if mode in ("idle", "saved") else "disabled")

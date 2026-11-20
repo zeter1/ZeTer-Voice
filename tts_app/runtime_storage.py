@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import stat
+from .i18n import DEFAULT_LANGUAGE, normalize_language
 from .mp3_format import read_mp3_format
 
 from .runtime_core import *
@@ -103,6 +104,7 @@ def merge_workspace_tabs(first: list[dict], second: list[dict]) -> list[dict]:
 
 DEFAULT_SETTINGS = {
     "schema": 1,
+    "ui_language": DEFAULT_LANGUAGE,
     "voice": DEFAULT_VOICE_HINT,
     "rate": 0,
     "pitch": 0,
@@ -132,6 +134,7 @@ def normalize_settings(raw: dict | None) -> dict:
     if isinstance(raw, dict):
         result.update(raw)
 
+    result["ui_language"] = normalize_language(result["ui_language"])
     result["voice"] = str(result.get("voice") or DEFAULT_VOICE_HINT)
     result["rate"] = clamp_int(
         result.get("rate"),

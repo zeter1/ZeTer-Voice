@@ -2,7 +2,7 @@
 
 # ZeTer Voice
 
-**ZeTer Voice** is a Python desktop application for reading text with Microsoft SAPI system voices and saving text as MP3. It supports multiple tabs, global hotkeys, recovery of interrupted jobs, and long texts.
+**ZeTer Voice** is a Python desktop application for reading text with Windows SAPI, offline Silero, or online Microsoft Edge voices and saving text as MP3. It supports multiple tabs, global hotkeys, recovery of interrupted jobs, and long texts.
 
 The project is designed for everyday use: text can be listened to directly in the application, selected text can be captured from other programs, and audio versions of articles, notes, and documents can be created.
 
@@ -16,6 +16,16 @@ The project is designed for everyday use: text can be listened to directly in th
 
 Python, `pywin32`, and FFmpeg are included. Keep the `runtime` folder beside the EXE. Windows needs at least one installed **Microsoft SAPI voice**. A SHA-256 file is published beside the ZIP.
 
+## Screenshots
+
+![ZeTer Voice editor with text tabs, voice settings, and MP3 export](docs/screenshots/zeter-voice-editor-20261120.jpg)
+
+[MP3 and interface settings](docs/screenshots/zeter-voice-settings-20261120.jpg) · [Voice engines](docs/screenshots/zeter-voice-engines-20261120.jpg)
+
+## Interface language
+
+Open **Settings → General → Interface language** and choose Russian, English, Spanish, Polish, French, or Brazilian Portuguese. Use **Restart application** to apply the change. The reading voice is selected separately.
+
 ## What the project demonstrates
 
 - Python integration with Microsoft SAPI and COM through `pywin32`;
@@ -28,7 +38,7 @@ Python, `pywin32`, and FFmpeg are included. Keep the `runtime` folder beside the
 
 ## Optional Russian voice engines
 
-The **Voice engines / Голосовые движки** top tab installs or removes Silero (five offline voices) and Microsoft Edge (Svetlana and Dmitry, online). Existing components are preserved. Removal requires confirmation and keeps a recovery copy. System SAPI voices and user data are not removed. Portable builds include a private Python for engines; model/library downloads happen only when explicitly installing. Edge sends text to Microsoft.
+**Settings → Voice engines** installs or removes Silero (five offline voices) and Microsoft Edge (Svetlana and Dmitry, online). Existing components are preserved. Removal requires confirmation and keeps a recovery copy. System SAPI voices and user data are not removed. Portable builds include a private Python for engines; model/library downloads happen only when explicitly installing. Edge sends text to Microsoft.
 
 ## Features
 
@@ -70,7 +80,7 @@ MP3 generation uses `imageio-ffmpeg` or FFmpeg available from the system `PATH`.
 ## Launch from source
 
 ```powershell
-py text_to_mp3.py
+py "ZeTer Voice.py"
 ```
 
 ## Usage

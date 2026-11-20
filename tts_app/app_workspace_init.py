@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .i18n import DEFAULT_LANGUAGE, set_language, tr
+
 from tkinter import font as tkfont
 
 from .about_ui import build_about_page
@@ -19,22 +21,24 @@ from .ui_stall_diagnostics import UiStallMonitor, ExceptionHooks, ui_operation
 class AppWorkspaceInitMixin:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
+        set_language(DEFAULT_LANGUAGE)
         while True:
             try:
                 self.settings = load_settings()
                 break
             except (OSError, ValueError) as exc:
                 if isinstance(exc, ValueError):
-                    detail = "Восстановите settings.json из своей копии или переместите повреждённый файл в резервную папку."
+                    detail = tr("Восстановите settings.json из своей копии или переместите повреждённый файл в резервную папку.")
                 else:
-                    detail = "Освободите файл settings.json или восстановите доступ к нему."
+                    detail = tr("Освободите файл settings.json или восстановите доступ к нему.")
                 if not messagebox.askretrycancel(
                     APP_TITLE,
-                    f"Не удалось прочитать настройки.\n\n{detail}\n\nЗатем нажмите «Повторить».",
+                    tr("Не удалось прочитать настройки.\n\n{0}\n\nЗатем нажмите «Повторить».", detail),
                     parent=root,
                 ):
                     root.destroy()
                     return
+        set_language(self.settings.get("ui_language", DEFAULT_LANGUAGE))
         self.workspace_text_enabled = self.settings.get("save_workspace_text", True)
         self.logger = ProblemLogger()
         try:
@@ -47,7 +51,7 @@ class AppWorkspaceInitMixin:
             )
             self.logger.close(status="startup_failed")
             messagebox.showerror(
-                APP_TITLE, f"Не удалось подготовить папку «Текст».\n\n{exc}",
+                APP_TITLE, tr("Не удалось подготовить папку «Текст».\n\n{0}", exc),
                 parent=root,
             )
             root.destroy()
@@ -200,12 +204,13 @@ class AppWorkspaceInitMixin:
         pages.pack(fill="both", expand=True)
         reading = ttk.Frame(pages)
         nav_font = tkfont.Font(root=self.root, family="Segoe UI", size=11)
-        label_width = nav_font.measure("Озвучивание") + 24
+        titles = (tr("Озвучивание"), tr("Настройки"), tr("О программе"))
+        label_width = max(map(nav_font.measure, titles)) + 24
         self.section_label_space = tk.PhotoImage(master=self.root, width=label_width, height=1)
         tabs = {"image": self.section_label_space, "compound": "center"}
-        pages.add(reading, text="Озвучивание", **tabs)
-        pages.add(build_settings_page(pages, self), text="Настройки", **tabs)
-        pages.add(build_about_page(pages), text="О программе", **tabs)
+        pages.add(reading, text=titles[0], **tabs)
+        pages.add(build_settings_page(pages, self), text=titles[1], **tabs)
+        pages.add(build_about_page(pages), text=titles[2], **tabs)
 
         self.notebook = ClosableNotebook(reading, new_tab=self.new_tab)
         self.notebook.pack(fill="both", expand=True, pady=(16, 0))
@@ -233,11 +238,11 @@ class AppWorkspaceInitMixin:
 
         self.tab_menu = tk.Menu(self.root, tearoff=False)
         self.tab_menu.add_command(
-            label="Переименовать вкладку",
+            label=tr("Переименовать вкладку"),
             command=self.rename_context_tab,
         )
         self.tab_menu.add_command(
-            label="Закрыть вкладку",
+            label=tr("Закрыть вкладку"),
             command=self.close_context_tab,
         )
 
@@ -276,7 +281,7 @@ class AppWorkspaceInitMixin:
             recovery = read_workspace_manifest(WORKSPACE_RECOVERY_FILE)
             recovery_id = recovery.get("recovery_id")
             if not isinstance(recovery_id, str) or not recovery_id:
-                raise ValueError("Отсутствует идентификатор восстановления.")
+                raise ValueError(tr("Отсутствует идентификатор восстановления."))
             try:
                 receipt = WORKSPACE_RECOVERY_FILE.with_suffix(".absorbed").read_text(encoding="utf-8")
             except FileNotFoundError:
@@ -406,7 +411,7 @@ class AppWorkspaceInitMixin:
                     continue
 
             task = self.new_tab(
-                title=(raw_title or "Вкладка") + " — новый текст" if read_error else raw_title,
+                title=(raw_title or tr("Вкладка")) + tr(" — новый текст") if read_error else raw_title,
                 workspace_id=None if read_error else workspace_id,
                 restored_text=restored_text,
                 restored_settings=restored_settings,
@@ -447,12 +452,12 @@ class AppWorkspaceInitMixin:
             return
         if self._workspace_manifest_needs_read:
             if self._workspace_recovery_blocked:
-                text = ("Не удалось открыть workspace.json и workspace.recovery.json. "
-                        "Восстановите доступ к списку вкладок перед закрытием программы.")
+                text = (tr("Не удалось открыть workspace.json и workspace.recovery.json. "
+                        "Восстановите доступ к списку вкладок перед закрытием программы."))
             else:
-                text = ("Не удалось открыть workspace.json. Новые вкладки будут сохраняться отдельно "
+                text = (tr("Не удалось открыть workspace.json. Новые вкладки будут сохраняться отдельно "
                         "и восстановятся при следующем запуске. Прежний файл сохранён. "
-                        "Если он повреждён, восстановите его из резервной копии.")
+                        "Если он повреждён, восстановите его из резервной копии."))
             messagebox.showwarning(
                 APP_TITLE,
                 text,
@@ -463,8 +468,9 @@ class AppWorkspaceInitMixin:
             return
         messagebox.showwarning(
             APP_TITLE,
-            f"Не удалось открыть текст вкладок: {len(self._unread_workspace_tabs)}. "
-            "Прежние файлы защищены от записи. Новый текст сохраняется отдельно. "
-            "После восстановления доступа перезапустите программу.",
+            tr(
+                "Не удалось открыть текст вкладок: {0}. Прежние файлы защищены от записи. Новый текст сохраняется отдельно. После восстановления доступа перезапустите программу.",
+                len(self._unread_workspace_tabs),
+            ),
             parent=self.root,
         )

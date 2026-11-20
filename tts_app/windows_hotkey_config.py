@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .i18n import tr
+
 import os
 import time
 
@@ -25,7 +27,7 @@ class WindowsHotkeyConfigMixin:
     def parse_hotkey(cls, hotkey):
         raw = (hotkey or "").strip()
         if not raw:
-            raise ValueError("Введите горячую клавишу, например F8 или Ctrl+Shift+C.")
+            raise ValueError(tr("Введите горячую клавишу, например F8 или Ctrl+Shift+C."))
 
         prepared = (
             raw.replace("Control", "Ctrl")
@@ -39,7 +41,7 @@ class WindowsHotkeyConfigMixin:
         )
         parts = [p for p in prepared.split("+") if p]
         if not parts:
-            raise ValueError("Не удалось прочитать горячую клавишу.")
+            raise ValueError(tr("Не удалось прочитать горячую клавишу."))
 
         modifiers = set()
         main_keys = []
@@ -61,17 +63,17 @@ class WindowsHotkeyConfigMixin:
 
             if token not in cls.VK_BY_NAME:
                 raise ValueError(
-                    "Эта клавиша пока не поддерживается. Используйте буквы, цифры, F1-F24 "
-                    "или сочетания вроде Ctrl+Alt+X."
+                    tr("Эта клавиша пока не поддерживается. Используйте буквы, цифры, F1-F24 "
+                    "или сочетания вроде Ctrl+Alt+X.")
                 )
             if token not in main_keys:
                 main_keys.append(token)
 
         if not main_keys:
-            raise ValueError("Добавьте основную клавишу: F8, Q+W, C, X и т.д.")
+            raise ValueError(tr("Добавьте основную клавишу: F8, Q+W, C, X и т.д."))
 
         if len(main_keys) > 3:
-            raise ValueError("В горячей клавише можно использовать максимум 3 основные клавиши.")
+            raise ValueError(tr("В горячей клавише можно использовать максимум 3 основные клавиши."))
 
         normalized_parts = []
         for mod in cls.MODIFIER_ORDER:
@@ -130,7 +132,7 @@ class WindowsHotkeyConfigMixin:
             (len(keys[0]) == 1 or keys[0] in ("SPACE", "ПРОБЕЛ"))
             and not parsed["modifiers"].intersection(("CTRL", "ALT"))
         ):
-            return "Это сочетание может изменить выделение. Выберите F8 или Ctrl+Shift+C."
+            return tr("Это сочетание может изменить выделение. Выберите F8 или Ctrl+Shift+C.")
         return None
 
     def _hotkey_is_plain_ctrl_c(self):

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .i18n import tr
+
 from .runtime import *
 from .problem_logger import ProblemLogger
 from .text_processing import *
@@ -39,7 +41,7 @@ class TaskPreviewControlsMixin:
 
         current = self.current_preview_segment_text
         self.status_var.set(
-            f"Пауза: при «Продолжить» чтение начинается на одно предложение назад. {current}" if current else "Пауза."
+            tr("Пауза: при «Продолжить» чтение начинается на одно предложение назад. {0}", current) if current else tr("Пауза.")
         )
 
         self.app.logger.event(
@@ -134,7 +136,7 @@ class TaskPreviewControlsMixin:
             self.preview_is_paused = False
             self._set_playback_controls("busy")
             self.status_var.set(
-                "Возвращаюсь на одно предложение назад…"
+                tr("Возвращаюсь на одно предложение назад…")
             )
             self.flush_read_delete_log(
                 reason="resume_rewind",
@@ -159,7 +161,7 @@ class TaskPreviewControlsMixin:
             self._set_playback_controls("paused")
             current = self.current_preview_segment_text
             self.status_var.set(
-                f"Пауза: {current}" if current else "Пауза."
+                tr("Пауза: {0}", current) if current else tr("Пауза.")
             )
 
         elif state == "running":
@@ -231,13 +233,13 @@ class TaskPreviewControlsMixin:
             self.preview_stop_event.set()
             self.preview_pause_event.clear()
             self._set_playback_controls("busy")
-            self.status_var.set("Останавливаю воспроизведение…")
+            self.status_var.set(tr("Останавливаю воспроизведение…"))
         elif not preserve_bookmark:
             self.clear_preview_highlight()
             self.preview_is_paused = False
             self._set_playback_controls("idle")
             if not self.conversion_running():
-                self.status_var.set("Готово к работе.")
+                self.status_var.set(tr("Готово к работе."))
 
         self.flush_read_delete_log(
             reason=finish_reason,
@@ -272,7 +274,7 @@ class TaskPreviewControlsMixin:
             self.current_preview_segment_text = ""
             self._set_playback_controls("idle")
             if not self.conversion_running():
-                self.status_var.set("Готово к работе.")
+                self.status_var.set(tr("Готово к работе."))
 
         self.preview_keep_bookmark_after_stop = False
         self.flush_read_delete_log(

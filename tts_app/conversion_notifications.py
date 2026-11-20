@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .i18n import tr
+
 import ctypes
 from ctypes import wintypes
 import os
@@ -43,7 +45,7 @@ def reveal_audio_file(path: Path) -> None:
         else:
             subprocess.Popen(["xdg-open", str(path.parent)])
     else:
-        raise FileNotFoundError("Файл и его папка больше недоступны:\n" + str(path))
+        raise FileNotFoundError(tr("Файл и его папка больше недоступны:\n") + str(path))
 
 
 class ConversionNotifications:
@@ -67,14 +69,14 @@ class ConversionNotifications:
         window.attributes("-topmost", True)
         # Ignore WM close / Alt+F4: only the visible cross dismisses this item.
         window.protocol("WM_DELETE_WINDOW", lambda: None)
-        window.title("MP3 готов")
+        window.title(tr("MP3 готов"))
         self.windows.append(window)
 
         body = ttk.Frame(window, padding=12, relief="solid", borderwidth=1)
         body.pack(fill="both", expand=True)
         header = ttk.Frame(body)
         header.pack(fill="x")
-        ttk.Label(header, text="Аудиофайл готов", font=("Segoe UI", 11, "bold")).pack(side="left")
+        ttk.Label(header, text=tr("Аудиофайл готов"), font=("Segoe UI", 11, "bold")).pack(side="left")
         ttk.Button(header, text="×", width=3,
                    command=lambda: self.dismiss(window)).pack(side="right")
         left, top, right, bottom = notification_work_area(self.root)
@@ -89,7 +91,7 @@ class ConversionNotifications:
             if text:
                 ttk.Label(body, text=text, wraplength=max(100, width - 32),
                           justify="left").pack(fill="x", pady=(6, 0))
-        ttk.Button(body, text="Показать файл",
+        ttk.Button(body, text=tr("Показать файл"),
                    command=lambda: self.reveal(window, output)).pack(anchor="w", pady=(10, 0))
         window.geometry(f"{width}x1")
         window.update_idletasks()
@@ -106,7 +108,7 @@ class ConversionNotifications:
         try:
             reveal_audio_file(output)
         except OSError as exc:
-            messagebox.showerror("Не удалось открыть расположение файла", str(exc), parent=window)
+            messagebox.showerror(tr("Не удалось открыть расположение файла"), str(exc), parent=window)
         # Opening Explorer, including a failed attempt, never dismisses the item.
 
     def _reflow(self, area: tuple[int, int, int, int] | None = None) -> None:

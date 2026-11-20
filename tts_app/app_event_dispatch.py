@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .i18n import tr
+
 from .runtime import *
 from .problem_logger import ProblemLogger
 from .text_processing import *
@@ -104,9 +106,7 @@ class AppEventDispatchMixin:
                             )
 
                     for tab in list(self.tabs.values()):
-                        tab.audio_output_combo["values"] = (
-                            self.audio_output_choices
-                        )
+                        tab.audio_output_combo.set_choices(self.audio_output_choices)
 
                     outputs_blob = "\n".join(outputs)
                     self.logger.event(
@@ -170,17 +170,10 @@ class AppEventDispatchMixin:
                         if not self.shutdown_in_progress:
                             continue_job = messagebox.askyesno(
                                 APP_TITLE,
-                                "Прогноз свободного места показывает риск "
-                                "нехватки диска.\n\n"
-                                "Временные WAV: примерно "
-                                f"{format_bytes(forecast.get('estimated_temp_wav_bytes'))}\n"
-                                "Итоговый MP3: примерно "
-                                f"{format_bytes(forecast.get('estimated_mp3_bytes'))}\n"
-                                "Свободно во временной папке: "
-                                f"{format_bytes(forecast.get('temp_free_bytes'))}\n"
-                                "Свободно в папке MP3: "
-                                f"{format_bytes(forecast.get('output_free_bytes'))}\n\n"
-                                "Продолжить несмотря на риск?",
+                                tr(
+                                    "Прогноз свободного места показывает риск нехватки диска.\n\nВременные WAV: примерно {0}\nИтоговый MP3: примерно {1}\nСвободно во временной папке: {2}\nСвободно в папке MP3: {3}\n\nПродолжить несмотря на риск?",
+                                    format_bytes(forecast.get('estimated_temp_wav_bytes')), format_bytes(forecast.get('estimated_mp3_bytes')), format_bytes(forecast.get('temp_free_bytes')), format_bytes(forecast.get('output_free_bytes')),
+                                ),
                             )
                         if isinstance(decision, dict):
                             decision["continue"] = bool(
@@ -239,29 +232,28 @@ class AppEventDispatchMixin:
                     )
                     if removal.get("removed"):
                         task.status_var.set(
-                            f"Готово: {info['output']} — "
-                            "конвертированный текст удалён."
+                            tr("Готово: {0} — конвертированный текст удалён.", info['output'])
                         )
                         text_note = (
-                            "\n\nКонвертированный текст удалён из вкладки.\n"
-                            "Добавленный позже текст сохранён: "
-                            f"{remaining_chars:,} символов."
+                            tr(
+                                "\n\nКонвертированный текст удалён из вкладки.\nДобавленный позже текст сохранён: {0:,} символов.",
+                                remaining_chars,
+                            )
                         ).replace(",", " ")
                     else:
                         task.status_var.set(
-                            f"Готово: {info['output']} — "
-                            "исходный текст сохранён."
+                            tr("Готово: {0} — исходный текст сохранён.", info['output'])
                         )
                         text_note = (
-                            "\n\nИсходный текст не удалён: его снимок "
+                            tr("\n\nИсходный текст не удалён: его снимок "
                             "изменился или не удалось безопасно подтвердить "
-                            "границы. Новый текст также сохранён."
+                            "границы. Новый текст также сохранён.")
                         )
 
                     if not self.shutdown_in_progress and not self.settings.get("quiet_mp3_notifications"):
                         if not hasattr(self, "completion_notifications"):
                             self.completion_notifications = ConversionNotifications(self.root)
-                        backup_note = "\nРезервная копия текста сохранена." if backup_path else ""
+                        backup_note = tr("\nРезервная копия текста сохранена.") if backup_path else ""
                         self.completion_notifications.show(
                             Path(info["output"]), text_note.strip() + backup_note,
                         )
@@ -273,7 +265,7 @@ class AppEventDispatchMixin:
                         reason="cancelled",
                     )
                     task.set_job_idle()
-                    task.status_var.set("Остановлено.")
+                    task.status_var.set(tr("Остановлено."))
                     if not self.shutdown_in_progress:
                         messagebox.showinfo(
                             APP_TITLE,
@@ -287,27 +279,27 @@ class AppEventDispatchMixin:
                         reason="job_error",
                     )
                     task.set_job_idle()
-                    task.status_var.set("Ошибка.")
+                    task.status_var.set(tr("Ошибка."))
 
                     diagnostic = ""
                     if info.get("error_log"):
                         diagnostic = (
-                            "\n\nДиагностика сохранена:\n"
+                            tr("\n\nДиагностика сохранена:\n")
                             + str(info["error_log"])
                         )
 
                     recovery_note = ""
                     if info.get("recovery_preserved"):
                         recovery_note = (
-                            "\n\nГотовые WAV сохранены для восстановления "
-                            "после следующего запуска программы:\n"
+                            tr("\n\nГотовые WAV сохранены для восстановления "
+                            "после следующего запуска программы:\n")
                             + str(info.get("recovery_dir") or "")
                         )
 
                     if not self.shutdown_in_progress:
                         messagebox.showerror(
                             APP_TITLE,
-                            str(info.get("user_message") or info["exc"])
+                            tr(str(info.get("user_message") or info["exc"]))
                             + diagnostic
                             + recovery_note,
                         )
@@ -455,7 +447,7 @@ class AppEventDispatchMixin:
                     # A disconnected endpoint may return between attempts.
                     # Refresh the real device list but never auto-switch output
                     # or replay an unverified block.
-                    if "сейчас не найдено в Windows SAPI" in str(exc):
+                    if isinstance(exc, AudioOutputUnavailableError) or "сейчас не найдено в Windows SAPI" in str(exc):
                         self._load_audio_outputs_async()
 
                     task.current_preview_finish_reason = "error"
@@ -481,17 +473,16 @@ class AppEventDispatchMixin:
                     if not task.preview_bookmark:
                         task.clear_preview_highlight()
                     task.status_var.set(
-                        "Ошибка воспроизведения. "
-                        "Сохранённую позицию можно продолжить."
+                        tr("Ошибка воспроизведения. "
+                        "Сохранённую позицию можно продолжить.")
                         if task.preview_bookmark
-                        else "Ошибка воспроизведения."
+                        else tr("Ошибка воспроизведения.")
                     )
 
                     if not self.shutdown_in_progress:
                         messagebox.showerror(
                             APP_TITLE,
-                            "Не удалось воспроизвести текст.\n\n"
-                            f"{exc}",
+                            tr("Не удалось воспроизвести текст.\n\n{0}", audio_error_message(exc)),
                         )
 
         except queue.Empty:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .i18n import tr
+
 from .runtime import *
 from .problem_logger import ProblemLogger
 from .text_processing import *
@@ -34,7 +36,7 @@ class TaskCaptureMixin:
         if not captured_text or captured_text.isspace():
             messagebox.showwarning(
                 APP_TITLE,
-                "В выделении нет текста для чтения.",
+                tr("В выделении нет текста для чтения."),
             )
             return False
         if self.text_box.cget("state") != "normal":
@@ -92,12 +94,12 @@ class TaskCaptureMixin:
 
         if during_mp3_conversion:
             self.status_var.set(
-                "Текст добавлен вниз. Он сохранён для следующего MP3 "
-                "и не входит в текущую конвертацию."
+                tr("Текст добавлен вниз. Он сохранён для следующего MP3 "
+                "и не входит в текущую конвертацию.")
             )
 
         elif auto_read_requested and not auto_read:
-            self.status_var.set("Текст добавлен вниз.")
+            self.status_var.set(tr("Текст добавлен вниз."))
 
         elif live_preview and auto_read_requested:
             if not self.current_preview_follow_end:
@@ -116,15 +118,15 @@ class TaskCaptureMixin:
             self.current_preview_follow_end = True
             self.current_preview_range_end = new_chars
             self.status_var.set(
-                "Выделенный текст добавлен вниз. "
-                "Текущее чтение не прерывается; новый текст будет прочитан следом."
+                tr("Выделенный текст добавлен вниз. "
+                "Текущее чтение не прерывается; новый текст будет прочитан следом.")
             )
 
         elif live_preview:
             self.current_preview_follow_end = False
             self.status_var.set(
-                "Текст добавлен вниз. Текущее чтение продолжается, "
-                "но новый текст оставлен для ручного запуска."
+                tr("Текст добавлен вниз. Текущее чтение продолжается, "
+                "но новый текст оставлен для ручного запуска.")
             )
 
         elif saved_pause and auto_read_requested:
@@ -143,14 +145,14 @@ class TaskCaptureMixin:
                 )
 
             self.status_var.set(
-                "Выделенный текст добавлен вниз. "
-                "Пауза сохранена — нажмите «Продолжить»."
+                tr("Выделенный текст добавлен вниз. "
+                "Пауза сохранена — нажмите «Продолжить».")
             )
 
         elif saved_pause:
             self.status_var.set(
-                "Текст добавлен вниз. Пауза сохранена; новый текст "
-                "оставлен для ручного запуска."
+                tr("Текст добавлен вниз. Пауза сохранена; новый текст "
+                "оставлен для ручного запуска.")
             )
 
         elif auto_read_requested:
@@ -165,7 +167,7 @@ class TaskCaptureMixin:
             )
         else:
             self.status_var.set(
-                "Текст добавлен вниз. Автоматическое чтение отключено."
+                tr("Текст добавлен вниз. Автоматическое чтение отключено.")
             )
 
         self.session_captured_chars += len(captured_text)
@@ -260,7 +262,7 @@ class TaskCaptureMixin:
             self._log_paste_rejected("paste_button", "validate_target", "mp3_running")
             messagebox.showwarning(
                 APP_TITLE,
-                "Нельзя изменять текст, пока эта вкладка создаёт MP3.",
+                tr("Нельзя изменять текст, пока эта вкладка создаёт MP3."),
             )
             return
         if self.text_box.cget("state") != "normal":
@@ -273,7 +275,7 @@ class TaskCaptureMixin:
             self._log_paste_rejected("paste_button", "clipboard_read", "clipboard_unavailable")
             messagebox.showwarning(
                 APP_TITLE,
-                "В буфере обмена нет текста для вставки.",
+                tr("В буфере обмена нет текста для вставки."),
             )
             return
 
@@ -281,7 +283,7 @@ class TaskCaptureMixin:
             self._log_paste_rejected("paste_button", "clipboard_read", "clipboard_empty")
             messagebox.showwarning(
                 APP_TITLE,
-                "В буфере обмена нет текста для вставки.",
+                tr("В буфере обмена нет текста для вставки."),
             )
             return
 
@@ -352,12 +354,12 @@ class TaskCaptureMixin:
 
                 if saved_pause:
                     self.status_var.set(
-                        "Текст добавлен в конец. Пауза сохранена — "
-                        "нажмите «Продолжить»."
+                        tr("Текст добавлен в конец. Пауза сохранена — "
+                        "нажмите «Продолжить».")
                     )
                 elif live_preview:
                     self.status_var.set(
-                        "Текст добавлен в конец. Чтение продолжается."
+                        tr("Текст добавлен в конец. Чтение продолжается.")
                     )
 
                 self.app.logger.event(
@@ -392,8 +394,7 @@ class TaskCaptureMixin:
             self.schedule_queue_status_refresh(text_state_reason="clipboard_paste")
 
             self.status_var.set(
-                "Вставлено из буфера обмена: "
-                f"{len(clipboard_text):,} символов.".replace(",", " ")
+                tr("Вставлено из буфера обмена: {0:,} символов.", len(clipboard_text)).replace(",", " ")
             )
 
             self.app.logger.event(
@@ -418,6 +419,5 @@ class TaskCaptureMixin:
             )
             messagebox.showerror(
                 APP_TITLE,
-                "Не удалось вставить текст из буфера обмена.\n\n"
-                f"{exc}",
+                tr("Не удалось вставить текст из буфера обмена.\n\n{0}", exc),
             )

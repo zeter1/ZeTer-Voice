@@ -1,6 +1,8 @@
 """Tk text viewing and compact, non-content metrics for large workspaces."""
 from __future__ import annotations
 
+from .i18n import tr
+
 import hashlib
 import re
 import time
@@ -109,10 +111,10 @@ class TaskTextPerformanceMixin:
                 self._text_metrics()
         if self._display_long_line and self._word_wrap_var.get():
             if not messagebox.askyesno(
-                "Большая строка текста",
-                "У этой вкладки очень длинная строка. Включение переноса "
+                tr("Большая строка текста"),
+                tr("У этой вкладки очень длинная строка. Включение переноса "
                 "может надолго заблокировать интерфейс.\n\n"
-                "Всё равно включить перенос?",
+                "Всё равно включить перенос?"),
                 default="no",
             ):
                 self._word_wrap_var.set(False)

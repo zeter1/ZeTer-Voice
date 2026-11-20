@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .i18n import tr
+
 from .runtime import *
 from .problem_logger import ProblemLogger
 from .text_processing import *
@@ -83,19 +85,18 @@ class TaskUiStatusMixin:
             sentence_count = metrics["sentences"]
 
             label = (
-                f"В очереди: ~{sentence_count} предл. / "
-                f"{self._format_char_count(chars)} симв."
+                tr("В очереди: ~{0} предл. / {1} симв.", sentence_count, self._format_char_count(chars))
             )
             if self.session_captured_chars:
                 label += (
-                    " • добавлено: "
+                    tr(" • добавлено: ")
                     + self._format_char_count(
                         self.session_captured_chars
                     )
                 )
             if self.session_read_chars:
                 label += (
-                    " • прочитано: "
+                    tr(" • прочитано: ")
                     + self._format_char_count(
                         self.session_read_chars
                     )

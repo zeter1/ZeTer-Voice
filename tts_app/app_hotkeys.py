@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .i18n import tr
+
 from .runtime import *
 from .problem_logger import ProblemLogger
 from .text_processing import *
@@ -115,7 +117,7 @@ class AppHotkeysMixin:
         except Exception as exc:
             task.copy_hotkey_var.set(previous)
             task.copy_hotkey_status_var.set(
-                f"Ошибка: {exc}"
+                tr("Ошибка: {0}", exc)
             )
             self.logger.event(
                 "tab_copy_hotkey_invalid",
@@ -126,7 +128,7 @@ class AppHotkeysMixin:
             )
             if not silent:
                 messagebox.showerror(
-                    "Горячая клавиша",
+                    tr("Горячая клавиша"),
                     str(exc),
                 )
             return False
@@ -142,7 +144,7 @@ class AppHotkeysMixin:
                 TAB_HOTKEY_NONE_LABEL
             )
             task.copy_hotkey_status_var.set(
-                "Горячая клавиша не назначена."
+                tr("Горячая клавиша не назначена.")
             )
             self.logger.event(
                 "tab_copy_hotkey_cleared",
@@ -159,11 +161,11 @@ class AppHotkeysMixin:
             if silent:
                 # Keep legacy assignments in the workspace so they can be reassigned.
                 task.applied_copy_hotkey = task.copy_hotkey_var.get()
-                task.copy_hotkey_status_var.set(f"Неактивна. {unsafe}")
+                task.copy_hotkey_status_var.set(tr("Неактивна. {0}", unsafe))
                 return True
             task.copy_hotkey_var.set(previous)
             task.copy_hotkey_status_var.set(unsafe)
-            messagebox.showwarning("Горячая клавиша", unsafe)
+            messagebox.showwarning(tr("Горячая клавиша"), unsafe)
             return False
 
         owner = self._task_hotkey_owner(
@@ -173,12 +175,10 @@ class AppHotkeysMixin:
         if owner is not None:
             task.copy_hotkey_var.set(previous)
             message = (
-                f'Горячая клавиша {normalized} уже назначена '
-                f'вкладке «{owner.tab_title()}». '
-                "Выберите другую клавишу."
+                tr("Горячая клавиша {0} уже назначена вкладке «{1}». Выберите другую клавишу.", normalized, owner.tab_title())
             )
             task.copy_hotkey_status_var.set(
-                f"{normalized} уже занята другой вкладкой."
+                tr("{0} уже занята другой вкладкой.", normalized)
             )
             self.logger.event(
                 "tab_copy_hotkey_conflict",
@@ -191,7 +191,7 @@ class AppHotkeysMixin:
             )
             if not silent:
                 messagebox.showwarning(
-                    "Горячая клавиша уже используется",
+                    tr("Горячая клавиша уже используется"),
                     message,
                 )
             return False
@@ -207,7 +207,7 @@ class AppHotkeysMixin:
         ):
             task.copy_hotkey_var.set(normalized)
             task.copy_hotkey_status_var.set(
-                f"{normalized} → только эта вкладка"
+                tr("{0} → только эта вкладка", normalized)
             )
             return True
 
@@ -261,7 +261,7 @@ class AppHotkeysMixin:
             task.applied_copy_hotkey = previous
             task.copy_hotkey_var.set(previous)
             task.copy_hotkey_status_var.set(
-                f"Не удалось включить {normalized}."
+                tr("Не удалось включить {0}.", normalized)
             )
             self.logger.event(
                 "tab_copy_hotkey_enable_failed",
@@ -272,16 +272,15 @@ class AppHotkeysMixin:
             )
             if not silent:
                 messagebox.showerror(
-                    "Горячая клавиша",
-                    "Не удалось включить горячую клавишу.\n\n"
-                    f"{exc}",
+                    tr("Горячая клавиша"),
+                    tr("Не удалось включить горячую клавишу.\n\n{0}", exc),
                 )
             return False
 
         task.applied_copy_hotkey = normalized
         task.copy_hotkey_var.set(normalized)
         task.copy_hotkey_status_var.set(
-            f"{normalized} → только эта вкладка"
+            tr("{0} → только эта вкладка", normalized)
         )
 
         self.logger.event(
@@ -328,7 +327,7 @@ class AppHotkeysMixin:
                     TAB_HOTKEY_NONE_LABEL
                 )
                 task.copy_hotkey_status_var.set(
-                    "Горячая клавиша не назначена."
+                    tr("Горячая клавиша не назначена.")
                 )
                 self.logger.event(
                     "restored_tab_hotkey_reset",
@@ -363,9 +362,9 @@ class AppHotkeysMixin:
             self.logger.event(
                 "global_copy_capture_rejected", reason=rejected, **evidence,
             )
-            task.status_var.set(CAPTURE_FAILURE_STATUS.get(
+            task.status_var.set(tr(CAPTURE_FAILURE_STATUS.get(
                 rejected, "Не удалось захватить текст. Выделите его и повторите.",
-            ))
+            )))
             return
 
         sequence = capture_info["clipboard_sequence_after"]

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .i18n import tr
+
 from .voice_catalog import voice_spec
 from .voice_process import VoiceSession
 
@@ -40,9 +42,9 @@ class TaskConversionWorkerMixin:
                     "job_error",
                     {
                         "user_message": (
-                            "Не установлен pywin32.\n\n"
+                            tr("Не установлен pywin32.\n\n"
                             "Установите:\n"
-                            "py -m pip install pywin32"
+                            "py -m pip install pywin32")
                         ),
                         "error_log": "",
                         "exc": exc,
@@ -141,7 +143,7 @@ class TaskConversionWorkerMixin:
             chunks = split_normalized_text(text)
             if not chunks:
                 raise RuntimeError(
-                    "После подготовки текста не осталось данных для озвучки."
+                    tr("После подготовки текста не осталось данных для озвучки.")
                 )
 
             chunk_char_lengths = [len(chunk) for chunk in chunks]
@@ -176,7 +178,7 @@ class TaskConversionWorkerMixin:
                     or saved.get("text_sha256") != text_hash_full
                     or saved.get("chunks_total") != len(chunks)
                 ):
-                    raise RuntimeError("Снимок текста не совпадает с данными восстановления MP3.")
+                    raise RuntimeError(tr("Снимок текста не совпадает с данными восстановления MP3."))
                 checkpoint_limit = recovery_checkpoint_limit(saved, len(chunks))
                 _, rate_overflow = split_extended_sapi_rate(rate)
                 if (
@@ -287,9 +289,7 @@ class TaskConversionWorkerMixin:
                                 * 92.0
                             ),
                             "text": (
-                                "Восстановление: найдено "
-                                f"{resumed_existing_chunks}/{len(chunks)} "
-                                "готовых фрагментов."
+                                tr("Восстановление: найдено {0}/{1} готовых фрагментов.", resumed_existing_chunks, len(chunks))
                             ),
                         },
                     )
@@ -357,7 +357,7 @@ class TaskConversionWorkerMixin:
 
                 if self.cancel_event.is_set():
                     raise InterruptedError(
-                        "Операция остановлена пользователем."
+                        tr("Операция остановлена пользователем.")
                     )
 
                 stage = f"sapi_chunk_{index}"
@@ -372,7 +372,7 @@ class TaskConversionWorkerMixin:
                 for attempt in range(1, max_attempts + 1):
                     if self.cancel_event.is_set():
                         raise InterruptedError(
-                            "Операция остановлена пользователем."
+                            tr("Операция остановлена пользователем.")
                         )
 
                     try:
@@ -395,7 +395,7 @@ class TaskConversionWorkerMixin:
                             or wav_candidate.stat().st_size < 128
                         ):
                             raise RuntimeError(
-                                "Движок не создал корректный WAV-файл."
+                                tr("Движок не создал корректный WAV-файл.")
                             )
 
                         generated_wav_info = get_wav_info(wav_candidate)
@@ -404,11 +404,11 @@ class TaskConversionWorkerMixin:
                             or not generated_wav_info.get("frames")
                         ):
                             raise RuntimeError(
-                                "Движок создал неполный или повреждённый WAV-файл."
+                                tr("Движок создал неполный или повреждённый WAV-файл.")
                             )
 
                         if self.cancel_event.is_set():
-                            raise InterruptedError("Операция остановлена пользователем.")
+                            raise InterruptedError(tr("Операция остановлена пользователем."))
                         wav_candidate.replace(wav_path)
                         success = True
                         break
@@ -440,8 +440,7 @@ class TaskConversionWorkerMixin:
 
                 if not success:
                     raise RuntimeError(
-                        f"Не удалось озвучить фрагмент {index} из {len(chunks)} "
-                        f"после {max_attempts} попыток. {last_error}"
+                        tr("Не удалось озвучить фрагмент {0} из {1} после {2} попыток. {3}", index, len(chunks), max_attempts, last_error)
                     )
 
                 chunk_durations.append(elapsed)
@@ -550,11 +549,10 @@ class TaskConversionWorkerMixin:
                 sapi_pct = (index / len(chunks)) * 92.0
                 eta_text = format_eta(eta_sec)
                 status_text = (
-                    f"Озвучивание: {index}/{len(chunks)} "
-                    f"({len(chunk)} символов)"
+                    tr("Озвучивание: {0}/{1} ({2} символов)", index, len(chunks), len(chunk))
                 )
                 if eta_text and remaining_chunks > 0:
-                    status_text += f" — осталось {eta_text}"
+                    status_text += tr(" — осталось {0}", eta_text)
 
                 self.app.events.put(
                     (
@@ -700,8 +698,8 @@ class TaskConversionWorkerMixin:
                             )
                         ):
                             raise InterruptedError(
-                                "Создание MP3 остановлено из-за "
-                                "недостатка свободного места."
+                                tr("Создание MP3 остановлено из-за "
+                                "недостатка свободного места.")
                             )
 
                 now_perf = time.perf_counter()
@@ -751,14 +749,14 @@ class TaskConversionWorkerMixin:
 
             if self.cancel_event.is_set():
                 raise InterruptedError(
-                    "Операция остановлена пользователем."
+                    tr("Операция остановлена пользователем.")
                 )
 
             # CODEX-REGION: ffmpeg-assembly
             stage = "ffmpeg"
             self.current_job_stage = stage
             if len(wav_files) != len(chunks):
-                raise RuntimeError("Часть звуковых фрагментов отсутствует. MP3 не создан.")
+                raise RuntimeError(tr("Часть звуковых фрагментов отсутствует. MP3 не создан."))
 
             # FFmpeg's concat demuxer expects matching streams. Measure exact
             # sample counts before encoding instead of summing rounded durations.
@@ -767,14 +765,14 @@ class TaskConversionWorkerMixin:
             for path in wav_files:
                 info = get_wav_info(path)
                 if not info.get("appears_complete") or not info.get("frames"):
-                    raise RuntimeError("Один из звуковых фрагментов пуст или повреждён.")
+                    raise RuntimeError(tr("Один из звуковых фрагментов пуст или повреждён."))
                 current_format = (
                     info["sample_rate_hz"], info["channels"], info["sample_width_bits"],
                 )
                 if wav_format is None:
                     wav_format = current_format
                 if current_format != wav_format:
-                    raise RuntimeError("Форматы звуковых фрагментов не совпадают. MP3 не создан.")
+                    raise RuntimeError(tr("Форматы звуковых фрагментов не совпадают. MP3 не создан."))
                 expected_audio_frames += info["frames"]
             expected_audio_sec = expected_audio_frames / wav_format[0]
 
@@ -869,8 +867,8 @@ class TaskConversionWorkerMixin:
                         )
                     ):
                         raise InterruptedError(
-                            "Создание MP3 остановлено из-за "
-                            "недостатка места для итогового файла."
+                            tr("Создание MP3 остановлено из-за "
+                            "недостатка места для итогового файла.")
                         )
 
             self.app.logger.task_progress(
@@ -899,7 +897,7 @@ class TaskConversionWorkerMixin:
                     "progress",
                     {
                         "pct": 94.0,
-                        "text": "Кодирую итоговый MP3…",
+                        "text": tr("Кодирую итоговый MP3…"),
                     },
                 )
             )
@@ -929,18 +927,16 @@ class TaskConversionWorkerMixin:
                             / fraction_value
                         )
                     status = (
-                        f"Кодирование MP3: {ffmpeg_percent:.1f}% "
-                        f"— прошло {ffmpeg_elapsed:.1f} сек"
+                        tr("Кодирование MP3: {0:.1f}% — прошло {1:.1f} сек", ffmpeg_percent, ffmpeg_elapsed)
                     )
                     eta_text = format_eta(ffmpeg_eta_sec)
                     if eta_text:
-                        status += f" — осталось {eta_text}"
+                        status += tr(" — осталось {0}", eta_text)
                 else:
                     ui_pct = 94.0
                     ffmpeg_percent = None
                     status = (
-                        "Кодирование MP3… "
-                        f"прошло {info.get('elapsed_sec', 0):.1f} сек"
+                        tr("Кодирование MP3… прошло {0:.1f} сек", info.get('elapsed_sec', 0))
                     )
 
                 self.app.events.put(
@@ -1013,7 +1009,7 @@ class TaskConversionWorkerMixin:
             ffmpeg_audio_duration = expected_audio_sec
             if ffmpeg_result.get("stderr_tail"):
                 raise FfmpegError(
-                    "FFmpeg сообщил об ошибке при сборке звуковых фрагментов.",
+                    tr("FFmpeg сообщил об ошибке при сборке звуковых фрагментов."),
                     stderr=str(ffmpeg_result["stderr_tail"]),
                 )
 
@@ -1026,7 +1022,7 @@ class TaskConversionWorkerMixin:
                 or candidate_mp3.stat().st_size == 0
             ):
                 raise RuntimeError(
-                    "Итоговый MP3 не найден после завершения обработки."
+                    tr("Итоговый MP3 не найден после завершения обработки.")
                 )
 
             self.app.events.put(
@@ -1035,7 +1031,7 @@ class TaskConversionWorkerMixin:
                     "progress",
                     {
                         "pct": 99.7,
-                        "text": "Проверяю готовый MP3…",
+                        "text": tr("Проверяю готовый MP3…"),
                     },
                 )
             )
@@ -1070,7 +1066,7 @@ class TaskConversionWorkerMixin:
                 validation=output_validation,
             )
             if self.cancel_event.is_set():
-                raise InterruptedError("Операция остановлена пользователем.")
+                raise InterruptedError(tr("Операция остановлена пользователем."))
             stage = "publish_output"
             self.current_job_stage = stage
             published_path = publish_mp3(candidate_mp3, output_path, approved_output_identity)
@@ -1258,7 +1254,7 @@ class TaskConversionWorkerMixin:
                 (
                     self.task_id,
                     "progress",
-                    {"pct": 100.0, "text": "Готово."},
+                    {"pct": 100.0, "text": tr("Готово.")},
                 )
             )
             self.app.events.put(
@@ -1454,7 +1450,7 @@ class TaskConversionWorkerMixin:
                     self.task_id,
                     "job_error",
                     {
-                        "user_message": str(exc),
+                        "user_message": audio_error_message(exc),
                         "error_log": error_log,
                         "run_id": run_id,
                         "recovery_preserved": (

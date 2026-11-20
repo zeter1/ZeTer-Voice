@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .i18n import tr
+
 from .runtime import *
 from .problem_logger import ProblemLogger
 from .text_processing import *
@@ -29,7 +31,7 @@ class AppRecoveryMixin:
             self.logger.event("recovery_job_discard_failed", run_id=manifest.get("run_id"),
                               exception_type=type(exc).__name__)
             messagebox.showerror(
-                APP_TITLE, "Не удалось полностью удалить папку восстановления. Проверьте доступ к файлам.",
+                APP_TITLE, tr("Не удалось полностью удалить папку восстановления. Проверьте доступ к файлам."),
                 parent=self.root,
             )
             return
@@ -61,9 +63,10 @@ class AppRecoveryMixin:
             self.logger.event("recovery_scan_deferred", folders_count=len(deferred))
             if not messagebox.askretrycancel(
                 APP_TITLE,
-                f"Не удалось полностью проверить папки восстановления MP3: {len(deferred)}.\n\n"
-                "Проверьте, не заняты ли файлы и есть ли доступ к папке «Незавершённые задачи», "
-                "затем повторите проверку. «Отмена» отложит проверку этих папок до следующего запуска.",
+                tr(
+                    "Не удалось полностью проверить папки восстановления MP3: {0}.\n\nПроверьте, не заняты ли файлы и есть ли доступ к папке «Незавершённые задачи», затем повторите проверку. «Отмена» отложит проверку этих папок до следующего запуска.",
+                    len(deferred),
+                ),
                 parent=self.root,
             ):
                 break
@@ -159,17 +162,16 @@ class AppRecoveryMixin:
 
             if not task_matches and not recovery_source_valid:
                 reason = (
-                    "исходная вкладка больше не существует"
+                    tr("исходная вкладка больше не существует")
                     if task is None
-                    else "текст исходной вкладки изменился"
+                    else tr("текст исходной вкладки изменился")
                 )
                 delete = messagebox.askyesno(
                     APP_TITLE,
-                    "Найдена незавершённая конвертация, но "
-                    f"{reason}.\n\n"
-                    "Точная копия текста этой задачи также недоступна, "
-                    "поэтому безопасно продолжить нельзя.\n\n"
-                    "Удалить данные восстановления?",
+                    tr(
+                        "Найдена незавершённая конвертация, но {0}.\n\nТочная копия текста этой задачи также недоступна, поэтому безопасно продолжить нельзя.\n\nУдалить данные восстановления?",
+                        reason,
+                    ),
                 )
                 if delete:
                     self._discard_recovery_job(
@@ -190,9 +192,9 @@ class AppRecoveryMixin:
                 manifest.get("state") or ""
             )
             reason_text = (
-                "Найдена конвертация, завершившаяся ошибкой."
+                tr("Найдена конвертация, завершившаяся ошибкой.")
                 if recovery_state == "failed"
-                else "Найдена аварийно оборванная конвертация."
+                else tr("Найдена аварийно оборванная конвертация.")
             )
 
             original_title = str(
@@ -200,27 +202,27 @@ class AppRecoveryMixin:
                 or (
                     task.tab_title()
                     if task is not None
-                    else "Восстановление"
+                    else tr("Восстановление")
                 )
             )
             source_note = ""
             if not task_matches and recovery_source_valid:
                 source_note = (
-                    "\nИсходная вкладка изменилась/удалена, но "
+                    tr("\nИсходная вкладка изменилась/удалена, но "
                     "сохранена точная копия текста задачи. "
-                    "Для неё будет создана отдельная вкладка восстановления.\n"
+                    "Для неё будет создана отдельная вкладка восстановления.\n")
                 )
 
             answer = messagebox.askyesnocancel(
                 APP_TITLE,
-                reason_text + "\n\n"
-                f"Вкладка: {original_title}\n"
-                f"Готово фрагментов: {valid_chunks}/{chunks_total}\n"
-                f"Файл: {manifest.get('output_path', '')}\n"
+                reason_text + tr(
+                                  "\n\nВкладка: {0}\nГотово фрагментов: {1}/{2}\nФайл: {3}\n",
+                                  original_title, valid_chunks, chunks_total, manifest.get('output_path', ''),
+                              )
                 + source_note
-                + "\nДа — продолжить с готовых WAV.\n"
+                + tr("\nДа — продолжить с готовых WAV.\n"
                 "Нет — удалить данные восстановления.\n"
-                "Отмена — оставить данные и решить позже.",
+                "Отмена — оставить данные и решить позже."),
             )
 
             if answer is None:
@@ -250,7 +252,7 @@ class AppRecoveryMixin:
             if target_task is None:
                 target_task = self.new_tab(
                     title=(
-                        f"{original_title} — восстановление"
+                        tr("{0} — восстановление", original_title)
                     ),
                     restored_text=recovery_text,
                     custom_title=True,
@@ -266,8 +268,8 @@ class AppRecoveryMixin:
 
             messagebox.showwarning(
                 APP_TITLE,
-                "Не удалось запустить восстановление этой задачи. "
-                "Данные оставлены в папке восстановления.",
+                tr("Не удалось запустить восстановление этой задачи. "
+                "Данные оставлены в папке восстановления."),
             )
 
     def toggle_windows_autostart(self) -> None:
@@ -278,7 +280,7 @@ class AppRecoveryMixin:
             self.settings["autostart_windows"] = False
             messagebox.showwarning(
                 APP_TITLE,
-                "Автозапуск этой программы поддерживается только в Windows.",
+                tr("Автозапуск этой программы поддерживается только в Windows."),
             )
             return
 
@@ -305,6 +307,5 @@ class AppRecoveryMixin:
             )
             messagebox.showerror(
                 APP_TITLE,
-                "Не удалось изменить автозапуск с Windows.\n\n"
-                f"{exc}",
+                tr("Не удалось изменить автозапуск с Windows.\n\n{0}", tr(str(exc))),
             )

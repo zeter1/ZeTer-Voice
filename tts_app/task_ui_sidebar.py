@@ -1,7 +1,10 @@
 """The voice, audio and capture controls shown alongside the text editor."""
 from __future__ import annotations
 
-from .runtime import PITCH_MAX, PITCH_MIN, RATE_MAX, RATE_MIN, TAB_HOTKEY_NONE_LABEL, clamp_int, tk, ttk
+from .i18n import tr
+from .localized_choices import LocalizedCombobox
+
+from .runtime import DEFAULT_AUDIO_OUTPUT_LABEL, PITCH_MAX, PITCH_MIN, RATE_MAX, RATE_MIN, TAB_HOTKEY_NONE_LABEL, clamp_int, tk, ttk
 from .voice_catalog import voice_spec
 from .windows_tools import GlobalCopyHotkeyMonitor
 from .workspace_theme import SURFACE
@@ -62,9 +65,12 @@ class TaskUiSidebarMixin:
         voice = ttk.Frame(self.sidebar_content, style="Card.TFrame", padding=(15, 12))
         voice.pack(fill="x")
         voice.columnconfigure(0, weight=1)
-        ttk.Label(voice, text="Голос и звук", style="Heading.Card.TLabel").grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 9))
-        ttk.Label(voice, text="Голос", style="Card.TLabel").grid(row=1, column=0, sticky="w")
-        self.voice_combo = ttk.Combobox(voice, textvariable=self.voice_var, values=self.app.voices, state="readonly", width=44)
+        ttk.Label(voice, text=tr("Голос и звук"), style="Heading.Card.TLabel").grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 9))
+        ttk.Label(voice, text=tr("Голос"), style="Card.TLabel").grid(row=1, column=0, sticky="w")
+        self.voice_combo = LocalizedCombobox(
+            voice, self.voice_var, self.app.voices,
+            lambda value: tr(value) if voice_spec(value) else value, width=44,
+        )
         self.voice_combo.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(3, 0))
         voice_notice = ttk.Label(voice, style="Note.Card.TLabel", width=1)
         voice_notice.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(3, 0))
@@ -74,16 +80,16 @@ class TaskUiSidebarMixin:
             spec = voice_spec(selected)
             engine = spec[0] if spec else None
             voice_notice.configure(text={
-                "silero": "Silero работает без интернета",
-                "edge": "Edge передаёт текст Microsoft",
-                None: "Голос Windows работает локально" if selected else "Выберите голос или установите движок в настройках",
+                "silero": tr("Silero работает без интернета"),
+                "edge": tr("Edge передаёт текст Microsoft"),
+                None: tr("Голос Windows работает локально") if selected else tr("Выберите голос или установите движок в настройках"),
             }[engine])
             self._sync_edge_privacy_note()
 
         self.voice_var.trace_add("write", update_voice_notice)
         update_voice_notice()
-        self.rate_scale = self._add_voice_slider(voice, 4, "Скорость", self.rate_var, self.rate_value_var, RATE_MIN, RATE_MAX)
-        self.pitch_scale = self._add_voice_slider(voice, 6, "Высота голоса", self.pitch_var, self.pitch_value_var, PITCH_MIN, PITCH_MAX)
+        self.rate_scale = self._add_voice_slider(voice, 4, tr("Скорость"), self.rate_var, self.rate_value_var, RATE_MIN, RATE_MAX)
+        self.pitch_scale = self._add_voice_slider(voice, 6, tr("Высота голоса"), self.pitch_var, self.pitch_value_var, PITCH_MIN, PITCH_MAX)
         volume_display = tk.StringVar(value=str(self.volume_var.get()))
 
         def sync_volume(*_args) -> None:
@@ -94,13 +100,15 @@ class TaskUiSidebarMixin:
             volume_display.set(str(clamp_int(value, 0, 100, 100)))
 
         self.volume_var.trace_add("write", sync_volume)
-        self._add_voice_slider(voice, 8, "Громкость", self.volume_var, volume_display, 0, 100)
-        ttk.Label(voice, text="Устройство воспроизведения", style="Card.TLabel").grid(row=10, column=0, columnspan=2, sticky="w", pady=(7, 0))
+        self._add_voice_slider(voice, 8, tr("Громкость"), self.volume_var, volume_display, 0, 100)
+        ttk.Label(voice, text=tr("Устройство воспроизведения"), style="Card.TLabel").grid(row=10, column=0, columnspan=2, sticky="w", pady=(7, 0))
         output = ttk.Frame(voice, style="Paper.TFrame")
         output.grid(row=11, column=0, columnspan=2, sticky="ew", pady=(3, 0))
         output.columnconfigure(0, weight=1)
-        self.audio_output_combo = ttk.Combobox(
-            output, textvariable=self.audio_output_var, values=self.app.audio_output_choices, state="readonly", width=1,
+        self.audio_output_combo = LocalizedCombobox(
+            output, self.audio_output_var, self.app.audio_output_choices,
+            lambda value: tr(value) if value == DEFAULT_AUDIO_OUTPUT_LABEL else value,
+            width=1,
         )
         self.audio_output_combo.grid(row=0, column=0, sticky="ew")
         ttk.Button(output, text="↻", width=3, command=self.app.refresh_audio_outputs, style="Compact.TButton").grid(
@@ -141,30 +149,36 @@ class TaskUiSidebarMixin:
         capture = ttk.Frame(self.sidebar_content, style="Card.TFrame", padding=(15, 12))
         capture.pack(fill="x", pady=(12, 0))
         capture.columnconfigure(0, weight=1)
-        ttk.Label(capture, text="Захват текста", style="Heading.Card.TLabel").grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 9))
-        ttk.Label(capture, text="Горячая клавиша", style="Card.TLabel").grid(row=1, column=0, sticky="w", padx=(0, 8))
-        self.copy_hotkey_combo = ttk.Combobox(
-            capture, textvariable=self.copy_hotkey_var,
-            values=(TAB_HOTKEY_NONE_LABEL, *GlobalCopyHotkeyMonitor.PRESET_HOTKEYS),
-            state="normal", width=11,
+        ttk.Label(capture, text=tr("Захват текста"), style="Heading.Card.TLabel").grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 9))
+        ttk.Label(capture, text=tr("Горячая клавиша"), style="Card.TLabel").grid(row=1, column=0, sticky="w", padx=(0, 8))
+        self.copy_hotkey_combo = LocalizedCombobox(
+            capture, self.copy_hotkey_var,
+            (TAB_HOTKEY_NONE_LABEL, *GlobalCopyHotkeyMonitor.PRESET_HOTKEYS),
+            lambda value: tr(value) if value == TAB_HOTKEY_NONE_LABEL else value,
+            editable=True, width=11,
         )
         self.copy_hotkey_combo.grid(row=1, column=1, sticky="e")
-        self.copy_hotkey_combo.bind("<<ComboboxSelected>>", lambda _event: self.apply_copy_hotkey())
-        self.copy_hotkey_combo.bind("<FocusOut>", lambda _event: self.apply_copy_hotkey(silent=True))
-        self.copy_hotkey_combo.bind("<Return>", lambda _event: self.apply_copy_hotkey())
+
+        def apply_hotkey(event) -> None:
+            self.copy_hotkey_combo.commit()
+            self.apply_copy_hotkey(silent=event.type == tk.EventType.FocusOut)
+
+        self.copy_hotkey_combo.bind("<<ComboboxSelected>>", apply_hotkey)
+        self.copy_hotkey_combo.bind("<FocusOut>", apply_hotkey)
+        self.copy_hotkey_combo.bind("<Return>", apply_hotkey)
         hotkey_status = ttk.Label(
             capture, textvariable=self.copy_hotkey_status_var, style="Note.Card.TLabel", width=1, wraplength=280,
         )
         hotkey_status.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(4, 6))
         capture_hint = ttk.Label(
-            capture, text="Выделите текст в другой программе", style="Note.Card.TLabel",
+            capture, text=tr("Выделите текст в другой программе"), style="Note.Card.TLabel",
         )
         capture_hint.grid(row=3, column=0, columnspan=2, sticky="w", pady=(0, 6))
         ttk.Checkbutton(
-            capture, text="Сразу читать добавленный текст", variable=self.auto_read_hotkey_var, style="Switch.Card.TCheckbutton",
+            capture, text=tr("Сразу читать добавленный текст"), variable=self.auto_read_hotkey_var, style="Switch.Card.TCheckbutton",
         ).grid(row=4, column=0, columnspan=2, sticky="w", pady=3)
         ttk.Checkbutton(
-            capture, text="Удалять прочитанные предложения", variable=self.delete_read_text_var, style="Switch.Card.TCheckbutton",
+            capture, text=tr("Удалять прочитанные предложения"), variable=self.delete_read_text_var, style="Switch.Card.TCheckbutton",
         ).grid(row=5, column=0, columnspan=2, sticky="w", pady=3)
 
     def _resize_sidebar(self, event: tk.Event) -> None:
@@ -187,7 +201,7 @@ class TaskUiSidebarMixin:
                 self.sidebar_button.focus_set()
             self.sidebar.grid_remove()
             self.sidebar_hotkey_hint.grid()
-        self.sidebar_button.configure(text="Скрыть параметры" if show else "Параметры вкладки")
+        self.sidebar_button.configure(text=tr("Скрыть параметры") if show else tr("Параметры вкладки"))
         self._sync_edge_privacy_note()
 
     def _sync_edge_privacy_note(self) -> None:

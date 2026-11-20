@@ -160,6 +160,7 @@ def apply_workspace_theme(root: tk.Tk) -> None:
     style.configure("Card.TLabel", background=WHITE)
     style.configure("Heading.Card.TLabel", font=("Segoe UI", 14, "bold"))
     style.configure("Note.Card.TLabel", foreground=MUTED, font=("Segoe UI", 9))
+    style.configure("Warning.Card.TLabel", foreground="#843d00", font=("Segoe UI", 10, "bold"))
     style.configure("Note.TLabel", foreground=MUTED, font=("Segoe UI", 9))
     style.configure("Card.TCheckbutton", background=WHITE)
     style.map("Card.TCheckbutton", background=[("active", WHITE)])

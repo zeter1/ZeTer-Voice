@@ -1,4 +1,6 @@
 """Fixed voice identities and offline discovery of the optional runtimes."""
+from .i18n import tr
+
 from contextlib import contextmanager
 from functools import lru_cache
 import hashlib
@@ -88,10 +90,10 @@ def verified_model(path: Path = MODEL_PATH, digest: str = MODEL_SHA256):
     try:
         stream = path.open('rb')
     except FileNotFoundError:
-        raise RuntimeError('Модель Silero не установлена. Выполните: python tools/setup_voices.py') from None
+        raise RuntimeError(tr('Модель Silero не установлена. Выполните: python tools/setup_voices.py')) from None
     with stream:
         actual = hashlib.file_digest(stream, 'sha256').hexdigest()
         if actual != digest:
-            raise RuntimeError('Модель Silero повреждена. Повторите python tools/setup_voices.py')
+            raise RuntimeError(tr('Модель Silero повреждена. Повторите python tools/setup_voices.py'))
         stream.seek(0)
         yield stream

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .i18n import tr
+
 from .engine_manager_ui import engine_operation_busy
 from .mp3_format import read_mp3_format
 
@@ -30,7 +32,7 @@ class TaskConversionControlsMixin:
                 kwargs["initialfile"] = safe_name + ".mp3"
 
         chosen = filedialog.asksaveasfilename(
-            title=f"Сохранить MP3 — {self.tab_title()}",
+            title=tr("Сохранить MP3 — {0}", self.tab_title()),
             defaultextension=".mp3",
             filetypes=[("MP3", "*.mp3")],
             confirmoverwrite=False,
@@ -49,7 +51,7 @@ class TaskConversionControlsMixin:
 
     def start_job(self) -> None:
         if engine_operation_busy(self.app):
-            messagebox.showinfo(APP_TITLE, 'Дождитесь завершения операции с движками или отмените её.')
+            messagebox.showinfo(APP_TITLE, tr('Дождитесь завершения операции с движками или отмените её.'))
             return
         if self.current_run_id or self.conversion_running():
             return
@@ -57,13 +59,13 @@ class TaskConversionControlsMixin:
         if self.text_box.compare("1.0", "==", "end-1c"):
             messagebox.showwarning(
                 APP_TITLE,
-                "Вставьте текст.",
+                tr("Вставьте текст."),
             )
             return
 
         voice = self.voice_var.get().strip()
         if not voice:
-            messagebox.showwarning(APP_TITLE, "Выберите голос.")
+            messagebox.showwarning(APP_TITLE, tr("Выберите голос."))
             return
 
         output_path = self.ask_output_path()
@@ -73,10 +75,10 @@ class TaskConversionControlsMixin:
         try:
             approved_output_identity = mp3_target_identity(output_path)
         except OSError as exc:
-            messagebox.showerror(APP_TITLE, f"Не удалось проверить путь MP3.\n{exc}")
+            messagebox.showerror(APP_TITLE, tr("Не удалось проверить путь MP3.\n{0}", exc))
             return
         if approved_output_identity is not None and not messagebox.askyesno(
-            APP_TITLE, f"Заменить существующий файл?\n{output_path}",
+            APP_TITLE, tr("Заменить существующий файл?\n{0}", output_path),
         ):
             return
         if self.app.shutdown_in_progress or self.current_run_id:
@@ -84,8 +86,8 @@ class TaskConversionControlsMixin:
         if self.app.output_is_used_by_other_task(self, output_path):
             messagebox.showwarning(
                 APP_TITLE,
-                "Другая вкладка уже создаёт MP3 по этому же пути.\n\n"
-                "Выберите другое имя файла, чтобы задачи не перезаписали друг друга.",
+                tr("Другая вкладка уже создаёт MP3 по этому же пути.\n\n"
+                "Выберите другое имя файла, чтобы задачи не перезаписали друг друга."),
             )
             return
 
@@ -94,7 +96,7 @@ class TaskConversionControlsMixin:
         if not raw_text or raw_text.isspace():
             messagebox.showwarning(
                 APP_TITLE,
-                "В тексте больше нет данных для создания MP3.",
+                tr("В тексте больше нет данных для создания MP3."),
             )
             return
 
@@ -119,8 +121,8 @@ class TaskConversionControlsMixin:
             )
             messagebox.showerror(
                 APP_TITLE,
-                "Не удалось зафиксировать точный снимок текста. "
-                "Создание MP3 не запущено, чтобы не удалить неверный текст.",
+                tr("Не удалось зафиксировать точный снимок текста. "
+                "Создание MP3 не запущено, чтобы не удалить неверный текст."),
             )
             return
 
@@ -169,8 +171,8 @@ class TaskConversionControlsMixin:
         ):
             messagebox.showwarning(
                 APP_TITLE,
-                "Нельзя продолжить восстановленную задачу: "
-                "другая вкладка уже пишет в тот же MP3.",
+                tr("Нельзя продолжить восстановленную задачу: "
+                "другая вкладка уже пишет в тот же MP3."),
             )
             return False
 
@@ -253,7 +255,7 @@ class TaskConversionControlsMixin:
 
         self.progress["value"] = 0
         self._set_mp3_controls(active=True)
-        self.status_var.set(f"Подготовка текста и резервной копии: {output_path.name}")
+        self.status_var.set(tr("Подготовка текста и резервной копии: {0}", output_path.name))
 
         def prepare_and_convert() -> None:
             stage = "prepare_mp3_text"
@@ -265,7 +267,7 @@ class TaskConversionControlsMixin:
                     raise InterruptedError
                 if not text:
                     self.app.events.put((self.task_id, "job_error", {
-                        "run_id": run_id, "user_message": "В тексте нет данных для создания MP3.",
+                        "run_id": run_id, "user_message": tr("В тексте нет данных для создания MP3."),
                     }))
                     return
                 metrics = analyze_text_for_logging(raw_text, text)
@@ -286,7 +288,7 @@ class TaskConversionControlsMixin:
                     raise InterruptedError
             except InterruptedError:
                 self.app.events.put((self.task_id, "cancelled", {
-                    "run_id": run_id, "message": "Создание MP3 остановлено. Исходный текст сохранён.",
+                    "run_id": run_id, "message": tr("Создание MP3 остановлено. Исходный текст сохранён."),
                 }))
                 return
             except Exception as exc:
@@ -297,8 +299,8 @@ class TaskConversionControlsMixin:
                 self.app.events.put((self.task_id, "job_error", {
                     "run_id": run_id, "error_log": error_log,
                     "user_message": (
-                        "Не удалось создать обязательную резервную копию текста."
-                        if stage == "create_mp3_text_backup" else "Не удалось подготовить текст."
+                        tr("Не удалось создать обязательную резервную копию текста.")
+                        if stage == "create_mp3_text_backup" else tr("Не удалось подготовить текст.")
                     ),
                 }))
                 return
@@ -329,11 +331,11 @@ class TaskConversionControlsMixin:
 
             if self.current_job_stage == "ffmpeg":
                 self.status_var.set(
-                    "Останавливаю FFmpeg и удаляю незавершённый .part.mp3…"
+                    tr("Останавливаю FFmpeg и удаляю незавершённый .part.mp3…")
                 )
             else:
                 self.status_var.set(
-                    "Остановка запрошена. Текущий фрагмент будет закончен."
+                    tr("Остановка запрошена. Текущий фрагмент будет закончен.")
                 )
 
     def set_job_idle(self) -> None:

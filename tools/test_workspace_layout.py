@@ -496,7 +496,7 @@ class WorkspaceLayoutTests(unittest.TestCase):
         groups, = page.winfo_children()
         general, _texts, _engines = groups.winfo_children()
         _mp3, system = general.winfo_children()
-        _notifications, startup = system.winfo_children()
+        _notifications, startup, _language = system.winfo_children()
         toggle = next(widget for widget in startup.winfo_children() if isinstance(widget, ttk.Checkbutton))
         self.assertEqual(toggle.cget("text"), "Автозапуск с Windows")
         if sys.platform == "win32":
@@ -509,6 +509,59 @@ class WorkspaceLayoutTests(unittest.TestCase):
                 self.assertFalse(self.app.settings["autostart_windows"])
         else:
             self.assertTrue(toggle.instate(["disabled"]))
+
+    def test_interface_language_is_saved_and_keeps_the_current_session(self):
+        sections = self.app.section_notebook
+        sections.select(1)
+        self.root.update()
+        page = self.root.nametowidget(sections.select())
+        groups, = page.winfo_children()
+        general = groups.winfo_children()[0]
+        system = general.winfo_children()[1]
+        language = system.winfo_children()[2]
+        combo = next(w for w in language.winfo_children() if isinstance(w, ttk.Combobox))
+        restart = next(w for w in language.winfo_children() if isinstance(w, ttk.Button))
+        warning = next(w for w in language.winfo_children()
+                       if isinstance(w, ttk.Label) and w.cget("style") == "Warning.Card.TLabel")
+        self.assertEqual(restart.cget("text"), "Перезапустить программу")
+        self.assertTrue(restart.instate(["disabled"]))
+        self.assertFalse(warning.winfo_ismapped())
+
+        self.assertEqual(tuple(combo["values"]), (
+            "Русский", "English", "Español", "Polski", "Français", "Português (Brasil)",
+        ))
+        with TemporaryDirectory() as temporary:
+            target = Path(temporary) / "settings.json"
+            with patch("tts_app.app_audio_settings.SETTINGS_FILE", target), \
+                    patch("tts_app.runtime_storage.SETTINGS_FILE", target):
+                combo.current(5)
+                combo.event_generate("<<ComboboxSelected>>")
+                self.assertEqual(load_settings()["ui_language"], "pt")
+                self.assertEqual(sections.tab(1, "text"), "Настройки")
+                self.root.update_idletasks()
+                self.assertTrue(warning.winfo_ismapped())
+                self.assertIn("Перезапустите ZeTer Voice", warning.cget("text"))
+                self.assertFalse(restart.instate(["disabled"]))
+                with patch.object(self.app, "on_close") as close:
+                    restart.invoke()
+                    close.assert_called_once_with(restart=True)
+
+                with patch("tts_app.app_audio_settings.atomic_write_json", side_effect=PermissionError), \
+                        patch("tts_app.app_audio_settings.messagebox.showerror") as showerror:
+                    combo.current(1)
+                    combo.event_generate("<<ComboboxSelected>>")
+                    showerror.assert_called_once()
+                self.assertEqual(combo.current(), 5)
+                self.assertEqual(self.app.settings["ui_language"], "pt")
+                self.assertEqual(load_settings()["ui_language"], "pt")
+                self.assertIn("Не удалось сохранить язык", warning.cget("text"))
+                self.assertFalse(restart.instate(["disabled"]))
+
+                combo.current(0)
+                combo.event_generate("<<ComboboxSelected>>")
+                self.root.update_idletasks()
+                self.assertTrue(restart.instate(["disabled"]))
+                self.assertFalse(warning.winfo_ismapped())
 
     def test_engines_page_is_inside_settings_and_keeps_applied_mp3_choices(self):
         sections = self.app.section_notebook

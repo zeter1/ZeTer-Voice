@@ -1,4 +1,6 @@
 """Global audio, editor, workspace, and Windows startup settings."""
+from .i18n import DEFAULT_LANGUAGE, LANGUAGES, normalize_language, tr
+
 import os
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -10,7 +12,7 @@ from .runtime_core import EDITOR_FONT_MIN, EDITOR_FONT_MAX, TEXT_BACKUP_RETENTIO
 
 
 MP3_CHOICES = (
-    ("bitrate", "Битрейт", {value: f"{value[:-1]} кбит/с" for value in BITRATES}),
+    ("bitrate", "Битрейт", BITRATES),
     ("mp3_channels", "Количество каналов", CHANNELS),
     ("mp3_sample_rate_hz", "Частота дискретизации", SAMPLE_RATES),
 )
@@ -22,10 +24,10 @@ def build_settings_page(parent: ttk.Notebook, app) -> ttk.Frame:
     settings_tabs.pack(fill="both", expand=True, padx=8, pady=(10, 0))
     general = ttk.Frame(settings_tabs)
     texts = ttk.Frame(settings_tabs)
-    settings_tabs.add(general, text="Общие")
-    settings_tabs.add(texts, text="Текст и резервные копии")
+    settings_tabs.add(general, text=tr("Общие"))
+    settings_tabs.add(texts, text=tr("Текст и резервные копии"))
     app.engine_manager = EngineManager(app, settings_tabs)
-    settings_tabs.add(app.engine_manager.frame, text="Голосовые движки")
+    settings_tabs.add(app.engine_manager.frame, text=tr("Голосовые движки"))
 
     output_dir = _setting_variable(page, app, "mp3_output_dir", tk.StringVar)
     quiet = _setting_variable(page, app, "quiet_mp3_notifications", tk.BooleanVar)
@@ -34,14 +36,15 @@ def build_settings_page(parent: ttk.Notebook, app) -> ttk.Frame:
     save_text = _setting_variable(page, app, "save_workspace_text", tk.BooleanVar)
     archive_versions = _setting_variable(page, app, "archive_text_versions", tk.BooleanVar)
 
-    mp3_card = _card(general, 0, "Параметры MP3")
+    mp3_card = _card(general, 0, tr("Параметры MP3"))
     _add_mp3_options(mp3_card, output_dir, app)
     system = ttk.Frame(general)
     system.grid(row=0, column=1, sticky="nw")
-    _add_notifications(_card(system, 0, "Уведомления"), quiet)
+    _add_notifications(_card(system, 0, tr("Уведомления")), quiet)
     _add_autostart(_card(system, 0, "Windows", row=1), app)
-    _add_editor(_card(texts, 0, "Редактор"), font_size, highlight)
-    _add_backups(_card(texts, 1, "Текст и резервные копии"), save_text, archive_versions, app)
+    _add_language(_card(system, 0, tr("Язык интерфейса"), row=2), app)
+    _add_editor(_card(texts, 0, tr("Редактор")), font_size, highlight)
+    _add_backups(_card(texts, 1, tr("Текст и резервные копии")), save_text, archive_versions, app)
     return page
 
 
@@ -70,12 +73,63 @@ def _card(parent: ttk.Frame, column: int, title: str, *, row: int = 0) -> ttk.Fr
     return card
 
 
+def _add_language(card: ttk.Frame, app) -> None:
+    codes = tuple(LANGUAGES)
+    combo = ttk.Combobox(card, state="readonly", values=tuple(LANGUAGES.values()), width=20)
+    active_language = normalize_language(app.settings.get("ui_language"))
+    combo.current(codes.index(active_language))
+    combo.grid(row=1, column=0, sticky="w")
+    warning = ttk.Label(
+        card, style="Warning.Card.TLabel", wraplength=260, justify="left",
+    )
+    warning.grid(row=2, column=0, sticky="w", pady=(7, 0))
+    restart = ttk.Button(
+        card, text=tr("Перезапустить программу"), style="Primary.TButton",
+        command=app.restart_for_language,
+    )
+    restart.grid(row=3, column=0, sticky="w", pady=(7, 0))
+
+    def update_warning(*, failed: bool = False) -> None:
+        pending = app.settings.get("ui_language", DEFAULT_LANGUAGE) != active_language
+        restart.state(["!disabled"] if pending else ["disabled"])
+        text = ""
+        if failed:
+            text = tr("Не удалось сохранить язык.")
+        elif pending:
+            text = tr("Перезапустите ZeTer Voice, чтобы применить выбранный язык.")
+        warning.configure(text=text)
+        if text:
+            warning.grid()
+        else:
+            warning.grid_remove()
+
+    def save_language(_event) -> None:
+        previous = normalize_language(app.settings.get("ui_language"))
+        index = combo.current()
+        if app.shutdown_in_progress or index < 0 or codes[index] == previous:
+            return
+        app.settings["ui_language"] = codes[index]
+        if app.save_settings():
+            update_warning()
+        else:
+            app.settings["ui_language"] = previous
+            combo.current(codes.index(previous))
+            update_warning(failed=True)
+
+    combo.bind("<<ComboboxSelected>>", save_language)
+    update_warning()
+
+
 def _add_mp3_options(card: ttk.Frame, output_dir: tk.StringVar, app) -> None:
     card.columnconfigure(1, weight=1)
     for row, (key, title, values) in enumerate(MP3_CHOICES, start=1):
-        ttk.Label(card, text=title, style="Card.TLabel").grid(row=row, column=0, sticky="w", padx=(0, 14), pady=4)
-        combo = ttk.Combobox(card, state="readonly", width=13, values=tuple(values.values()))
+        ttk.Label(card, text=tr(title), style="Card.TLabel").grid(row=row, column=0, sticky="w", padx=(0, 14), pady=4)
         keys = tuple(values)
+        labels = (
+            [tr("{0} кбит/с", value[:-1]) for value in keys] if key == "bitrate"
+            else [tr(values[value]) for value in keys]
+        )
+        combo = ttk.Combobox(card, state="readonly", width=13, values=labels)
         combo.current(keys.index(app.settings.get(key, DEFAULT_SETTINGS[key])))
         combo.grid(row=row, column=1, sticky="ew", pady=4)
 
@@ -88,13 +142,13 @@ def _add_mp3_options(card: ttk.Frame, output_dir: tk.StringVar, app) -> None:
 
     def choose_folder() -> None:
         directory = filedialog.askdirectory(
-            parent=card.winfo_toplevel(), title="Папка по умолчанию для MP3",
+            parent=card.winfo_toplevel(), title=tr("Папка по умолчанию для MP3"),
             initialdir=output_dir.get() or None, mustexist=True,
         )
         if directory:
             output_dir.set(directory)
 
-    ttk.Label(card, text="Папка по умолчанию для MP3", style="Card.TLabel").grid(
+    ttk.Label(card, text=tr("Папка по умолчанию для MP3"), style="Card.TLabel").grid(
         row=4, column=0, columnspan=2, sticky="w", pady=(8, 4),
     )
     ttk.Entry(card, textvariable=output_dir, state="readonly", width=1).grid(
@@ -102,25 +156,25 @@ def _add_mp3_options(card: ttk.Frame, output_dir: tk.StringVar, app) -> None:
     )
     folder_actions = ttk.Frame(card, style="Paper.TFrame")
     folder_actions.grid(row=6, column=0, columnspan=2, sticky="w", pady=(6, 3))
-    ttk.Button(folder_actions, text="Выбрать…", command=choose_folder, style="Compact.TButton").pack(
+    ttk.Button(folder_actions, text=tr("Выбрать…"), command=choose_folder, style="Compact.TButton").pack(
         side="left", padx=(0, 6),
     )
     ttk.Button(
-        folder_actions, text="Очистить", command=lambda: output_dir.set(""), style="Compact.TButton",
+        folder_actions, text=tr("Очистить"), command=lambda: output_dir.set(""), style="Compact.TButton",
     ).pack(side="left")
-    _note(card, 7, "Если поле пустое, окно сохранения откроется в последней доступной папке.")
+    _note(card, 7, tr("Если поле пустое, окно сохранения откроется в последней доступной папке."))
 
 
 def _add_notifications(card: ttk.Frame, quiet: tk.BooleanVar) -> None:
     ttk.Checkbutton(
-        card, text="Тихий режим для готовых MP3", variable=quiet, style="Switch.Card.TCheckbutton",
+        card, text=tr("Тихий режим для готовых MP3"), variable=quiet, style="Switch.Card.TCheckbutton",
     ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, 2))
-    _note(card, 2, "В тихом режиме сообщение о готовности остаётся в строке состояния.")
+    _note(card, 2, tr("В тихом режиме сообщение о готовности остаётся в строке состояния."))
 
 
 def _add_autostart(card: ttk.Frame, app) -> None:
     toggle = ttk.Checkbutton(
-        card, text="Автозапуск с Windows", variable=app.autostart_windows_var,
+        card, text=tr("Автозапуск с Windows"), variable=app.autostart_windows_var,
         command=app.toggle_windows_autostart, style="Switch.Card.TCheckbutton",
     )
     if os.name != "nt":
@@ -129,7 +183,7 @@ def _add_autostart(card: ttk.Frame, app) -> None:
 
 
 def _add_editor(card: ttk.Frame, font_size: tk.StringVar, highlight: tk.BooleanVar) -> None:
-    ttk.Label(card, text="Размер шрифта", style="Card.TLabel").grid(
+    ttk.Label(card, text=tr("Размер шрифта"), style="Card.TLabel").grid(
         row=1, column=0, sticky="w", padx=(0, 12),
     )
     ttk.Combobox(
@@ -137,7 +191,7 @@ def _add_editor(card: ttk.Frame, font_size: tk.StringVar, highlight: tk.BooleanV
         values=tuple(range(EDITOR_FONT_MIN, EDITOR_FONT_MAX + 1)),
     ).grid(row=1, column=1, sticky="w")
     ttk.Checkbutton(
-        card, text="Подсветка читаемого предложения", variable=highlight, style="Switch.Card.TCheckbutton",
+        card, text=tr("Подсветка читаемого предложения"), variable=highlight, style="Switch.Card.TCheckbutton",
     ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(10, 0))
 
 
@@ -145,15 +199,15 @@ def _add_backups(
     card: ttk.Frame, save_text: tk.BooleanVar, archive_versions: tk.BooleanVar, app,
 ) -> None:
     ttk.Checkbutton(
-        card, text="Сохранять текст между запусками", variable=save_text, style="Switch.Card.TCheckbutton",
+        card, text=tr("Сохранять текст между запусками"), variable=save_text, style="Switch.Card.TCheckbutton",
     ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, 2))
-    _note(card, 2, "Вкладки и их порядок сохраняются всегда. Режим действует со следующего запуска. "
-                   "Когда он выключен, новый текст остаётся до закрытия.")
+    _note(card, 2, tr("Вкладки и их порядок сохраняются всегда. Режим действует со следующего запуска. "
+                   "Когда он выключен, новый текст остаётся до закрытия."))
     ttk.Checkbutton(
-        card, text="Копии версий при автосохранении", variable=archive_versions, style="Switch.Card.TCheckbutton",
+        card, text=tr("Копии версий при автосохранении"), variable=archive_versions, style="Switch.Card.TCheckbutton",
     ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(10, 2))
-    _note(card, 4, "Защитные копии перед очисткой вкладки и созданием MP3 сохраняются отдельно.")
-    ttk.Label(card, text="Срок хранения копий, дней", style="Card.TLabel").grid(
+    _note(card, 4, tr("Защитные копии перед очисткой вкладки и созданием MP3 сохраняются отдельно."))
+    ttk.Label(card, text=tr("Срок хранения копий, дней"), style="Card.TLabel").grid(
         row=5, column=0, sticky="w", padx=(0, 12), pady=(10, 0),
     )
     key = "text_backup_retention_days"
@@ -175,11 +229,11 @@ def _add_backups(
         # first so a nested FocusOut cannot open a second confirmation.
         days.set(str(old_days))
         if not 1 <= value <= TEXT_BACKUP_RETENTION_MAX_DAYS:
-            status.configure(text=f"Укажите от 1 до {TEXT_BACKUP_RETENTION_MAX_DAYS} дней.")
+            status.configure(text=tr("Укажите от 1 до {0} дней.", TEXT_BACKUP_RETENTION_MAX_DAYS))
             return
         if value < old_days and not messagebox.askyesno(
-            "Срок хранения резервных копий",
-            f"При плановой очистке копии старше {value} дн. будут удалены. Применить этот срок?",
+            tr("Срок хранения резервных копий"),
+            tr("При плановой очистке копии старше {0} дн. будут удалены. Применить этот срок?", value),
             parent=app.root, default=messagebox.NO,
         ):
             return

@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from .runtime import tk
+import os
+import subprocess
+import sys
+
+from .i18n import set_language, tr
+
+from .runtime import app_code_dir, load_settings, messagebox, tk
 from .app_workspace import AppWorkspaceMixin
 from .app_recovery_hotkeys import AppRecoveryHotkeysMixin
 from .app_audio_settings import AppAudioSettingsMixin
@@ -16,7 +22,26 @@ class TTSApp(
 ):
     """Main application assembled from feature-focused mixins."""
 
-    pass
+    restart_requested = False
+
+
+def _relaunch() -> None:
+    command = [sys.executable]
+    env = None
+    if getattr(sys, "frozen", False):
+        env = {**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"}
+    else:
+        command.append(str(app_code_dir() / "ZeTer Voice.py"))
+    try:
+        subprocess.Popen(
+            command, env=env, stdin=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except OSError:
+        messagebox.showerror(
+            "ZeTer Voice",
+            tr("Не удалось запустить ZeTer Voice снова. Откройте программу вручную."),
+        )
 
 
 def main() -> None:
@@ -24,14 +49,21 @@ def main() -> None:
     if already_running:
         # No second Tk instance, hotkey monitors or competing workspace writes.
         import ctypes
+
+        try:
+            set_language(load_settings()["ui_language"])
+        except (OSError, ValueError):
+            pass
         ctypes.windll.user32.MessageBoxW(
-            None, "Программа уже запущена. Переключитесь на открытое окно.",
+            None, tr("Программа уже запущена. Переключитесь на открытое окно."),
             "ZeTer Voice", 0x40,
         )
         return
     try:
         root = tk.Tk()
-        TTSApp(root)
+        app = TTSApp(root)
         root.mainloop()
     finally:
         release_single_instance(instance_lock)
+    if app.restart_requested:
+        _relaunch()

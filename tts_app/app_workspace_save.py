@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .i18n import tr
+
 from concurrent.futures import Future
 
 from .runtime import *
@@ -249,7 +251,7 @@ class AppWorkspaceSaveMixin:
                 exception_type=type(exc).__name__, winerror=getattr(exc, "winerror", None),
             )
             messagebox.showerror(
-                APP_TITLE, "Не удалось сохранить резервную копию. Текст оставлен во вкладке.",
+                APP_TITLE, tr("Не удалось сохранить резервную копию. Текст оставлен во вкладке."),
                 parent=self.root,
             )
             return False

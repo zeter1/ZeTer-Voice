@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .i18n import tr
+
 from .voice_catalog import voice_spec
 from .generated_preview import preview_generated_audio
 from .engine_manager_ui import engine_operation_busy
@@ -23,7 +25,7 @@ class TaskPreviewPlayerMixin:
         preserve_existing_bookmark: bool = False,
     ) -> None:
         if engine_operation_busy(self.app):
-            messagebox.showinfo(APP_TITLE, 'Дождитесь завершения операции с движками или отмените её.')
+            messagebox.showinfo(APP_TITLE, tr('Дождитесь завершения операции с движками или отмените её.'))
             return
         if self.preview_thread and self.preview_thread.is_alive():
             return
@@ -35,7 +37,7 @@ class TaskPreviewPlayerMixin:
         text = raw_text
         voice = self.voice_var.get().strip()
         if not voice:
-            messagebox.showwarning(APP_TITLE, "Выберите голос.")
+            messagebox.showwarning(APP_TITLE, tr("Выберите голос."))
             return
 
         rate = clamp_int(self.rate_var.get(), RATE_MIN, RATE_MAX, 0)
@@ -126,11 +128,11 @@ class TaskPreviewPlayerMixin:
         self._set_playback_controls("running")
 
         if source_mode == "cursor":
-            self.status_var.set("Начинаю чтение с позиции курсора…")
+            self.status_var.set(tr("Начинаю чтение с позиции курсора…"))
         elif selected_text:
-            self.status_var.set("Воспроизвожу выделенный текст…")
+            self.status_var.set(tr("Воспроизвожу выделенный текст…"))
         else:
-            self.status_var.set("Воспроизвожу текст…")
+            self.status_var.set(tr("Воспроизвожу текст…"))
 
         if source_mode != "external_capture":
             self.log_text_state(
@@ -342,7 +344,7 @@ class TaskPreviewPlayerMixin:
                 - self.current_preview_segment_start,
             )
             self.status_var.set(
-                f"Читаю {index}/{total}: {short_text}"
+                tr("Читаю {0}/{1}: {2}", index, total, short_text)
             )
         except tk.TclError:
             # Если пользователь успел изменить текст во время чтения, не ломаем

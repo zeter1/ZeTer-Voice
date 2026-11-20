@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from .i18n import tr
+from .engine_manager_ui import engine_operation_busy
+
 from .runtime import *
 from .problem_logger import ProblemLogger
 from .text_processing import *
@@ -28,25 +31,38 @@ class AppShutdownMixin:
         if self._workspace_write is not None and not self._workspace_write[0].done():
             self.root.after(100, self._poll_shutdown)
             return
+        restarting = getattr(self, "_restart_on_close", False)
+        if restarting and status != "closed":
+            self.shutdown_in_progress = False
+            self._warn_restart_busy()
+            return
         if not self.save_workspace():
             self.logger.event("shutdown_workspace_save_failed")
             self.shutdown_in_progress = False
             messagebox.showerror(
                 APP_TITLE,
-                "Не удалось сохранить вкладки. Окно оставлено открытым, "
+                tr("Не удалось сохранить вкладки. Окно оставлено открытым, "
                 "чтобы сохранить текст. Проверьте доступ к папке программы "
-                "и попробуйте закрыть окно ещё раз.",
+                "и попробуйте закрыть окно ещё раз."),
                 parent=self.root,
             )
             return
         self.logger.event("workspace_saved_on_close", tabs=len(self.tabs), status=status)
 
         if not self.save_settings():
+            if restarting:
+                self.shutdown_in_progress = False
+                messagebox.showerror(
+                    APP_TITLE,
+                    tr("Не удалось сохранить настройки. Перезапуск отменён."),
+                    parent=self.root,
+                )
+                return
             close_without_settings = messagebox.askyesno(
                 APP_TITLE,
-                "Вкладки сохранены, но не удалось записать настройки. "
+                tr("Вкладки сохранены, но не удалось записать настройки. "
                 "Выберите «Нет», чтобы оставить окно открытым и повторить сохранение.\n\n"
-                "Закрыть программу без сохранения настроек?",
+                "Закрыть программу без сохранения настроек?"),
                 icon=messagebox.WARNING, default=messagebox.NO, parent=self.root,
             )
             if not close_without_settings:
@@ -79,6 +95,7 @@ class AppShutdownMixin:
         self.logger.close(status=status)
         self.exception_hooks.uninstall()
         self.root.destroy()
+        self.restart_requested = restarting
 
     def _poll_shutdown(self) -> None:
         if not self.shutdown_in_progress:
@@ -95,7 +112,28 @@ class AppShutdownMixin:
 
         self.root.after(100, self._poll_shutdown)
 
-    def on_close(self) -> None:
+    def _warn_restart_busy(self) -> None:
+        messagebox.showwarning(
+            tr("Перезапустить программу"),
+            tr("Сначала завершите чтение, создание MP3 или операцию с голосовым движком."),
+            parent=self.root,
+        )
+
+    def restart_for_language(self) -> None:
+        if self.shutdown_in_progress:
+            return
+        if not self.workspace_text_enabled and any(
+            task.text_box.compare("end-1c", ">", "1.0") for task in self.tabs.values()
+        ):
+            if not messagebox.askyesno(
+                tr("Перезапустить программу"),
+                tr("Сохранение текста между запусками выключено. Текущий текст вкладок пропадёт при перезапуске. Продолжить?"),
+                icon=messagebox.WARNING, default=messagebox.NO, parent=self.root,
+            ):
+                return
+        self.on_close(restart=True)
+
+    def on_close(self, *, restart: bool = False) -> None:
         if self.shutdown_in_progress:
             return
 
@@ -105,16 +143,17 @@ class AppShutdownMixin:
             if task.conversion_running()
         ]
 
+        if restart and (running or engine_operation_busy(self) or self._alive_background_threads()):
+            self._warn_restart_busy()
+            return
+
         if running:
             answer = messagebox.askyesno(
-                "Идёт создание MP3",
-                f"Сейчас создаётся MP3-задач: {len(running)}.\n\n"
-                "Если закрыть программу, текущая конвертация будет "
-                "корректно остановлена. Исходный текст и его бэкап "
-                "останутся, но текущий MP3 не будет считаться "
-                "завершённым.\n\n"
-                "Закрыть программу и остановить создание MP3?\n\n"
-                "Выберите «Нет», чтобы продолжить конвертацию.",
+                tr("Идёт создание MP3"),
+                tr(
+                    "Сейчас создаётся MP3-задач: {0}.\n\nЕсли закрыть программу, текущая конвертация будет корректно остановлена. Исходный текст и его бэкап останутся, но текущий MP3 не будет считаться завершённым.\n\nЗакрыть программу и остановить создание MP3?\n\nВыберите «Нет», чтобы продолжить конвертацию.",
+                    len(running),
+                ),
                 icon=messagebox.WARNING,
                 default=messagebox.NO,
             )
@@ -131,6 +170,7 @@ class AppShutdownMixin:
         ]
 
         self.shutdown_in_progress = True
+        self._restart_on_close = restart
         manager = getattr(self, 'engine_manager', None)
         if manager:
             manager.stop.set()
@@ -169,7 +209,7 @@ class AppShutdownMixin:
         for task in running:
             task.cancel_event.set()
             task.status_var.set(
-                "Завершаю задачу перед закрытием программы…"
+                tr("Завершаю задачу перед закрытием программы…")
             )
 
         for task in self.tabs.values():

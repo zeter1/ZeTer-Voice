@@ -14,7 +14,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from tts_app import app_audio_settings, app_shutdown, app_tabs, app_workspace_init, app_workspace_save, runtime_storage
+from tts_app import app as app_entry, app_audio_settings, app_shutdown, app_tabs, app_workspace_init, app_workspace_save, runtime_storage
 from tts_app.runtime_storage import DEFAULT_SETTINGS, atomic_write_json, read_workspace_manifest
 
 
@@ -37,7 +37,7 @@ class App(app_shutdown.AppShutdownMixin, app_workspace_save.AppWorkspaceSaveMixi
         self.workspace_save_due_perf = None
         self.workspace_save_failure_count = 0
         self.shutdown_in_progress = False
-        self.engine_manager = SimpleNamespace(thread=None, close=Mock(), stop=Mock())
+        self.engine_manager = SimpleNamespace(thread=None, busy=False, close=Mock(), stop=Mock())
         self.tab_hotkey_monitors = {"tab": object()}
         self._stop_tab_hotkey_monitor = Mock()
         self.save_settings = Mock()
@@ -67,6 +67,58 @@ class CloseTests(unittest.TestCase):
         ))
         self.dialog = self.enterContext(patch.object(app_shutdown.messagebox, "showerror"))
         self.app = App()
+
+    def test_restart_waits_for_tasks_and_requires_both_saves(self):
+        self.app.tab.conversion_running.return_value = True
+        with patch.object(app_shutdown.messagebox, "showwarning") as warning:
+            self.app.restart_for_language()
+            warning.assert_called_once()
+        self.app.root.destroy.assert_not_called()
+        self.app.save_settings.assert_not_called()
+        self.app.tab.conversion_running.return_value = False
+
+        self.app.save_settings.return_value = False
+        self.app.restart_for_language()
+        self.app.root.destroy.assert_not_called()
+        self.assertFalse(self.app.shutdown_in_progress)
+        self.assertFalse(getattr(self.app, "restart_requested", False))
+
+        self.app.save_settings.return_value = True
+        self.app.restart_for_language()
+        self.app.root.destroy.assert_called_once()
+        self.assertTrue(self.app.restart_requested)
+        self.assertEqual(self.tab_path.read_text(encoding="utf-8"), "новая строка\nnew line")
+
+    def test_restart_with_text_saving_off_requires_confirmation(self):
+        self.app.workspace_text_enabled = False
+        self.app.tab.text_box.compare.return_value = True
+        with patch.object(app_shutdown.messagebox, "askyesno", return_value=False) as confirmation:
+            self.app.restart_for_language()
+            confirmation.assert_called_once()
+        self.app.root.destroy.assert_not_called()
+
+    def test_main_releases_the_mutex_before_launching_the_new_instance(self):
+        calls = []
+        lock = object()
+        with patch.object(app_entry, "acquire_single_instance", return_value=(lock, False)), \
+                patch.object(app_entry.tk, "Tk"), \
+                patch.object(app_entry, "TTSApp", return_value=SimpleNamespace(restart_requested=True)), \
+                patch.object(app_entry, "release_single_instance", side_effect=lambda value: calls.append(value)), \
+                patch.object(app_entry, "_relaunch", side_effect=lambda: calls.append("new instance")):
+            app_entry.main()
+        self.assertEqual(calls, [lock, "new instance"])
+
+    def test_relaunch_uses_the_same_source_or_frozen_executable(self):
+        project = self.tab_dir.parent
+        with patch.object(app_entry, "app_code_dir", return_value=project), \
+                patch.object(app_entry.subprocess, "Popen") as launch:
+            app_entry._relaunch()
+            self.assertEqual(launch.call_args.args[0], [sys.executable, str(project / "ZeTer Voice.py")])
+            self.assertIsNone(launch.call_args.kwargs["env"])
+            with patch.object(sys, "frozen", True, create=True):
+                app_entry._relaunch()
+            self.assertEqual(launch.call_args.args[0], [sys.executable])
+            self.assertEqual(launch.call_args.kwargs["env"]["PYINSTALLER_RESET_ENVIRONMENT"], "1")
 
     def test_tabs_only_session_preserves_saved_text_and_bookmark_for_the_next_enabled_start(self):
         legacy_path = self.tab_dir / "старый текст.txt"

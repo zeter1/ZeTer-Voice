@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .i18n import tr
+
 from .runtime import *
 from .problem_logger import ProblemLogger
 from .text_processing import *
@@ -18,13 +20,13 @@ class TaskUiStateMixin:
         self.app.schedule_workspace_save()
 
     def apply_voice_list(self, voices: list[str]) -> None:
-        self.voice_combo["values"] = voices
+        self.voice_combo.set_choices(voices)
         if not voices:
             self.voice_var.set("")
-            self.status_var.set(VOICES_UNAVAILABLE_STATUS)
+            self.status_var.set(tr(VOICES_UNAVAILABLE_STATUS))
             return
-        if self.status_var.get() in (VOICES_LOADING_STATUS, VOICES_UNAVAILABLE_STATUS):
-            self.status_var.set("Готово к работе.")
+        if self.status_var.get() in (tr(VOICES_LOADING_STATUS), tr(VOICES_UNAVAILABLE_STATUS)):
+            self.status_var.set(tr("Готово к работе."))
 
         current = self.voice_var.get().strip()
         for voice in voices:
@@ -60,7 +62,7 @@ class TaskUiStateMixin:
         custom: bool = True,
         schedule_save: bool = True,
     ) -> None:
-        title = title.strip() or f"Вкладка {self.number}"
+        title = title.strip() or tr("Вкладка {0}", self.number)
         if len(title) > 60:
             title = title[:57] + "..."
         self.custom_title = bool(custom)

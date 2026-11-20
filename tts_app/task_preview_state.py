@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .i18n import tr
+
 from .runtime import *
 from .problem_logger import ProblemLogger
 from .text_processing import *
@@ -149,12 +151,11 @@ class TaskPreviewStateMixin:
         if snippet:
             self.current_preview_segment_text = snippet
             self.status_var.set(
-                f"Сохранена пауза ({percent:.1f}%): {snippet}"
+                tr("Сохранена пауза ({0:.1f}%): {1}", percent, snippet)
             )
         else:
             self.status_var.set(
-                f"Сохранена пауза книги: {percent:.1f}%. "
-                "Нажмите «Продолжить»."
+                tr("Сохранена пауза книги: {0:.1f}%. Нажмите «Продолжить».", percent)
             )
 
     def save_current_preview_bookmark(
@@ -332,8 +333,8 @@ class TaskPreviewStateMixin:
             if self.preview_bookmark is not None:
                 messagebox.showwarning(
                     APP_TITLE,
-                    "Сохранённая позиция чтения больше не подходит: "
-                    "текст вкладки был изменён. Позиция сброшена.",
+                    tr("Сохранённая позиция чтения больше не подходит: "
+                    "текст вкладки был изменён. Позиция сброшена."),
                 )
                 self.clear_saved_preview_bookmark(
                     reason="text_changed",
@@ -449,7 +450,7 @@ class TaskPreviewStateMixin:
         if not normalize_text(raw_text):
             messagebox.showwarning(
                 APP_TITLE,
-                "После курсора нет текста для воспроизведения.",
+                tr("После курсора нет текста для воспроизведения."),
             )
             return
 
@@ -469,7 +470,7 @@ class TaskPreviewStateMixin:
         if not normalize_text(raw_text):
             messagebox.showwarning(
                 APP_TITLE,
-                "Вставьте текст для воспроизведения.",
+                tr("Вставьте текст для воспроизведения."),
             )
             return
 

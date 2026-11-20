@@ -1,4 +1,6 @@
 """Persistent engine settings page. Background work reports through a Tk-owned queue."""
+from .i18n import tr
+
 import json
 import queue
 import subprocess
@@ -67,33 +69,33 @@ class EngineManager:
         self.status_generation = 0
         self.statuses = {}
         self.buttons = []
-        ttk.Label(self.frame, text='Установленные компоненты не обновляются автоматически.',
+        ttk.Label(self.frame, text=tr('Установленные компоненты не обновляются автоматически.'),
                   wraplength=720).pack(anchor='w', pady=(0, 10))
         cards = ttk.Frame(self.frame)
         cards.pack(fill='x', pady=(0, 8))
         cards.columnconfigure((0, 1), weight=1, uniform='engine_cards')
         for column, (engine, title, detail) in enumerate([
-            ('silero', 'Silero · 5 русских голосов', 'Без интернета после установки. Модель около 148 МБ; при отсутствии PyTorch потребуется дополнительная загрузка.'),
-            ('edge', 'Microsoft Edge · Светлана и Дмитрий', 'Нужен интернет. При озвучке текст передаётся Microsoft. Устанавливается отдельная копия для этой программы.'),
+            ('silero', tr('Silero · 5 русских голосов'), tr('Без интернета после установки. Модель около 148 МБ; при отсутствии PyTorch потребуется дополнительная загрузка.')),
+            ('edge', tr('Microsoft Edge · Светлана и Дмитрий'), tr('Нужен интернет. При озвучке текст передаётся Microsoft. Устанавливается отдельная копия для этой программы.')),
         ]):
             card = ttk.LabelFrame(cards, text=title, padding=10)
             card.grid(row=0, column=column, sticky='nsew', padx=(0, 10) if column == 0 else 0)
             ttk.Label(card, text=detail, wraplength=350).pack(anchor='w')
-            value = tk.StringVar(value='Проверяю…')
+            value = tk.StringVar(value=tr('Проверяю…'))
             self.statuses[engine] = value
             ttk.Label(card, textvariable=value, wraplength=350).pack(anchor='w', pady=6)
             row = ttk.Frame(card)
             row.pack(anchor='w')
-            for action, label in [('install', 'Установить'), ('remove', 'Удалить')]:
+            for action, label in [('install', tr('Установить')), ('remove', tr('Удалить'))]:
                 button = ttk.Button(row, text=label, command=lambda e=engine, a=action: self.start(a, e))
                 button.pack(side='left', padx=(0, 8))
                 self.buttons.append(button)
-        ttk.Label(self.frame, text='Windows SAPI и сторонние системные голоса остаются без изменений.\n'
-                  'При удалении сохраняется резервная копия. Ваши тексты, MP3 и настройки не удаляются.',
+        ttk.Label(self.frame, text=tr('Windows SAPI и сторонние системные голоса остаются без изменений.\n'
+                  'При удалении сохраняется резервная копия. Ваши тексты, MP3 и настройки не удаляются.'),
                   wraplength=720).pack(anchor='w', pady=4)
         controls = ttk.Frame(self.frame)
         controls.pack(fill='x', pady=(4, 0))
-        self.cancel = ttk.Button(controls, text='Отменить операцию', command=self.stop.set, state='disabled')
+        self.cancel = ttk.Button(controls, text=tr('Отменить операцию'), command=self.stop.set, state='disabled')
         self.cancel.pack(side='left')
         self.progress = ttk.Progressbar(controls, mode='indeterminate')
         self.progress.pack(side='left', fill='x', expand=True, padx=(12, 0))
@@ -115,7 +117,7 @@ class EngineManager:
             try:
                 result = {engine: engine_status(engine) for engine in ('silero', 'edge')}
             except Exception:
-                result = {engine: 'Не удалось проверить файлы' for engine in ('silero', 'edge')}
+                result = {engine: tr('Не удалось проверить файлы') for engine in ('silero', 'edge')}
             self.messages.put(('status', (generation, result)))
         threading.Thread(target=inspect, daemon=True, name='engine-status').start()
 
@@ -124,11 +126,11 @@ class EngineManager:
                 or getattr(self.app, 'shutdown_in_progress', False)):
             return
         if audio_active(self.app):
-            messagebox.showinfo('Голосовые движки', 'Сначала остановите прослушивание и создание MP3.', parent=self.root)
+            messagebox.showinfo(tr('Голосовые движки'), tr('Сначала остановите прослушивание и создание MP3.'), parent=self.root)
             return
-        if action == 'remove' and not messagebox.askyesno('Удалить движок?',
-                'Удалить выбранный движок из программы? Резервная копия будет сохранена.\n'
-                'Windows-голоса, настройки и ваши тексты останутся без изменений.', parent=self.root, default='no'):
+        if action == 'remove' and not messagebox.askyesno(tr('Удалить движок?'),
+                tr('Удалить выбранный движок из программы? Резервная копия будет сохранена.\n'
+                'Windows-голоса, настройки и ваши тексты останутся без изменений.'), parent=self.root, default='no'):
             return
         # A confirmation dialog runs a nested event loop: hotkeys/close may have run.
         if (self.closed or self.busy or self.tree_stop_unconfirmed or self.pending_process is not None
@@ -140,14 +142,14 @@ class EngineManager:
             button.configure(state='disabled')
         self.cancel.configure(state='normal')
         self.progress.start()
-        self.message.set('Устанавливаю… Для загрузки нужен интернет.' if action == 'install' else 'Удаляю с сохранением копии…')
+        self.message.set(tr('Устанавливаю… Для загрузки нужен интернет.') if action == 'install' else tr('Удаляю с сохранением копии…'))
         self.thread = threading.Thread(target=self.run, args=(action, engine), daemon=True, name='engine-management')
         self.thread.start()
 
     def run(self, action, engine):
         process = None
         stop_reason = None
-        result = 'Операция не завершена. Проверьте интернет и доступ к папке программы.'
+        result = tr('Операция не завершена. Проверьте интернет и доступ к папке программы.')
         try:
             script = program_root() / 'tools' / 'manage_voice_engine.py'
             with tempfile.TemporaryFile() as output:
@@ -167,6 +169,11 @@ class EngineManager:
                     payload = json.loads(output.read(4096))
                     if payload['ok'] is (process.returncode == 0) and isinstance(payload['message'], str):
                         result = payload['message'][:1000]
+                        removed_prefix = 'Удалён из программы. Резервная копия: '
+                        if result.startswith(removed_prefix):
+                            result = tr('Удалён из программы. Резервная копия: {0}', result[len(removed_prefix):])
+                        else:
+                            result = tr(result)
         except Exception:
             pass
         finally:
@@ -179,19 +186,19 @@ class EngineManager:
                     if not process_exited:
                         pending_process = process
                     elif stop_reason == 'cancelled':
-                        result = 'Операция остановлена. Успевшие установиться компоненты сохранены.'
+                        result = tr('Операция остановлена. Успевшие установиться компоненты сохранены.')
                     elif stop_reason == 'timeout':
-                        result = 'Время операции истекло. Успевшие установиться компоненты сохранены.'
+                        result = tr('Время операции истекло. Успевшие установиться компоненты сохранены.')
             except Exception:
                 pending_process = process
                 tree_stop_unconfirmed = process is not None
             finally:
                 if tree_stop_unconfirmed:
-                    result = ('Не удалось подтвердить остановку дерева процессов. '
-                              'Установка и удаление заблокированы в текущем сеансе.')
+                    result = (tr('Не удалось подтвердить остановку дерева процессов. '
+                              'Установка и удаление заблокированы в текущем сеансе.'))
                 elif pending_process is not None:
-                    result = ('Не удалось подтвердить остановку процесса установки. '
-                              'Управление будет доступно после его выхода.')
+                    result = (tr('Не удалось подтвердить остановку процесса установки. '
+                              'Управление будет доступно после его выхода.'))
                 self.messages.put(('done', (result, pending_process, tree_stop_unconfirmed)))
 
     def _refresh_after_operation(self):
@@ -214,7 +221,7 @@ class EngineManager:
                 generation, statuses = payload
                 if generation == self.status_generation:
                     for engine, value in statuses.items():
-                        self.statuses[engine].set(value)
+                        self.statuses[engine].set(tr(value))
             elif kind == 'done':
                 message, self.pending_process, self.tree_stop_unconfirmed = payload
                 self.busy = False

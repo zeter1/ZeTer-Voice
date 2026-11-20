@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .i18n import tr
+
 from .runtime import *
 from .problem_logger import ProblemLogger
 from .text_processing import *
@@ -28,7 +30,7 @@ class AppTabsMixin:
             self,
             self.task_counter,
             workspace_id=workspace_id,
-            restored_title=title or "Вкладка",
+            restored_title=title or tr("Вкладка"),
             restored_text=restored_text,
             restored_settings=restored_settings,
             restored_preview_bookmark=restored_preview_bookmark,
@@ -44,7 +46,7 @@ class AppTabsMixin:
 
         if self.voices:
             task.apply_voice_list(self.voices)
-        task.audio_output_combo["values"] = self.audio_output_choices
+        task.audio_output_combo.set_choices(self.audio_output_choices)
 
         self.renumber_default_tabs()
 
@@ -85,7 +87,7 @@ class AppTabsMixin:
             if task is None or task.custom_title:
                 continue
 
-            wanted = f"Вкладка {next_number}"
+            wanted = tr("Вкладка {0}", next_number)
             if task.tab_title() != wanted:
                 task.set_tab_title(
                     wanted,
@@ -170,8 +172,8 @@ class AppTabsMixin:
             return
 
         new_name = simpledialog.askstring(
-            "Переименовать вкладку",
-            "Новое имя вкладки:",
+            tr("Переименовать вкладку"),
+            tr("Новое имя вкладки:"),
             initialvalue=task.tab_title(),
             parent=self.root,
         )
@@ -182,7 +184,7 @@ class AppTabsMixin:
         if not new_name:
             messagebox.showwarning(
                 APP_TITLE,
-                "Имя вкладки не может быть пустым.",
+                tr("Имя вкладки не может быть пустым."),
             )
             return
 
@@ -212,15 +214,15 @@ class AppTabsMixin:
         if task.conversion_running():
             messagebox.showwarning(
                 APP_TITLE,
-                "Эта вкладка сейчас создаёт MP3.\n"
-                "Сначала остановите задачу и дождитесь её завершения.",
+                tr("Эта вкладка сейчас создаёт MP3.\n"
+                "Сначала остановите задачу и дождитесь её завершения."),
             )
             return
 
         if not self._archive_tab_before_overwrite(task, "close_tab"):
             return
         if not self.save_workspace(closing_task=task):
-            messagebox.showerror(APP_TITLE, "Не удалось сохранить вкладки. Вкладка оставлена открытой.", parent=self.root)
+            messagebox.showerror(APP_TITLE, tr("Не удалось сохранить вкладки. Вкладка оставлена открытой."), parent=self.root)
             return
         task.stop_preview()
         self._stop_tab_hotkey_monitor(
