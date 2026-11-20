@@ -23,8 +23,10 @@ CAPTURE_LOG_FIELDS = (
     "clipboard_sequence_before", "clipboard_sequence_observed", "clipboard_sequence_latest",
     "clipboard_open_busy_count", "clipboard_busy_opener", "clipboard_source_check",
     "clipboard_sequence_before_open", "clipboard_owner_sample",
+    "clipboard_open_at_dispatch", "clipboard_open_at_retry", "clipboard_open_at_timeout",
     "blocked_by_capture_id", "blocked_by_capture_stage",
-    "copy_waited_for_input", "capture_retry_of", "capture_retry_skipped",
+    "copy_waited_for_input", "capture_mouse_guard", "capture_attempt", "capture_retry_of", "capture_retry_skipped",
+    "capture_repeat_id", "capture_retry_mode", "capture_retry_dispatched", "capture_retry_ms",
 )
 
 
@@ -424,7 +426,7 @@ class AppHotkeysMixin:
             reason_detail = "Кнопку мыши или клавишу-модификатор удерживали до конца ожидания. Команда Ctrl+C не отправлялась."
             check = "Проверь copy_waited_for_input. Повтори с тем же выделением, отпустив кнопку мыши и клавиши сочетания."
         if reason == "clipboard_timeout" and evidence.get("capture_retry_skipped"):
-            check = "Проверь capture_retry_skipped и состояние исходного окна, ввода и буфера после повторного нажатия."
+            check = "Проверь capture_retry_skipped и состояние исходного окна, ввода и буфера перед повторной командой."
         if guidance == "clipboard_version_changed":
             source_check = evidence.get("clipboard_source_check")
             if source_check == "owner_unconfirmed":

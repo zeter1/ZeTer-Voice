@@ -10,6 +10,12 @@ from .runtime import CLIPBOARD_COPY_TIMEOUT_SEC, CLIPBOARD_DISPATCH_TIMEOUT_SEC
 
 
 WM_COPY_SELECTION = 0x8002
+_COPY_INPUT_MARKER = 0x5A565443
+_TELEGRAM_RETRY_AFTER_SEC = 0.4
+_COPY_MOUSE_ACTIONS = {
+    0x0201: "mouse_button", 0x0204: "mouse_button", 0x0207: "mouse_button", 0x020B: "mouse_button",
+    0x020A: "mouse_wheel", 0x020E: "mouse_wheel",
+}
 _MODIFIER_VKS = {
     "CTRL": (0x11, 0xA2, 0xA3),
     "SHIFT": (0x10, 0xA0, 0xA1),
@@ -90,8 +96,10 @@ class WindowsHotkeyHookMixin:
     def _pressed_modifiers(pressed):
         return {modifier for modifier, vks in _MODIFIER_VKS.items() if pressed.intersection(vks)}
 
-    def _dispatch_keyboard(self, vk, *, is_down, flags, pressed, suppressed, input_tick=None):
+    def _dispatch_keyboard(self, vk, *, is_down, flags, pressed, suppressed, from_hook=False, own_copy=False):
         if self._hook_event_is_injected(flags):
+            if not own_copy:
+                self._invalidate_copy_retries("keyboard")
             return False
         already_down = vk in pressed
         if is_down:
@@ -101,9 +109,10 @@ class WindowsHotkeyHookMixin:
         if vk in suppressed:
             if not is_down:
                 suppressed.discard(vk)
-                if input_tick is not None:
-                    self._confirm_copy_repeat(vk, input_tick)
+                if from_hook:
+                    self._confirm_copy_release(vk)
             return True
+        self._invalidate_copy_retries("keyboard")
         if not is_down or pressed.intersection((0x5B, 0x5C)):
             return False
         modifiers = self._pressed_modifiers(pressed)
@@ -111,7 +120,7 @@ class WindowsHotkeyHookMixin:
         if already_down and not native:
             return False
         if self._request_capture(
-            vk, modifiers, native=native, repeat=already_down, can_queue=input_tick is not None,
+            vk, modifiers, native=native, repeat=already_down, can_queue=from_hook,
         ):
             suppressed.add(vk)
             return True
@@ -148,8 +157,9 @@ class WindowsHotkeyHookMixin:
                 context["binding_generation"] = monitor._binding_generation
                 self._capture_id += 1
                 context.update(
-                    capture_id=self._capture_id, capture_protocol=5, capture_stage="trigger",
+                    capture_id=self._capture_id, capture_protocol=7, capture_stage="trigger",
                     copy_kind="native_ctrl_c" if native else "injected_ctrl_c",
+                    capture_mouse_guard=bool(self._mouse_hook_id),
                 )
             if not pid or not context["source_hwnd"] or not before:
                 self._report(monitor, context, reason="source_unavailable")
@@ -185,6 +195,8 @@ class WindowsHotkeyHookMixin:
                 # Observe its metadata only. Never read its text.
                 self._pending = self._new_copy_request(monitor, context, native, context["trigger_perf"])
                 send_copy = not native
+                if send_copy and can_queue and not modifiers and 0x70 <= vk <= 0x87:  # F1-F24
+                    self._pending["auto_retry_guard"] = {"vk": vk, "context": context, "released": False}
 
         if send_copy:
             if not self._wake_keyboard():
@@ -216,34 +228,78 @@ class WindowsHotkeyHookMixin:
                 or previous["clipboard_sequence_before"] != context["clipboard_sequence_before"]):
             return False
         context["capture_retry_of"] = previous["capture_id"]
-        pending["queued_repeat"] = {"vk": vk, "context": context, "input_ticks": ()}
+        previous["capture_repeat_id"] = context["capture_id"]
+        pending["queued_repeat"] = {"vk": vk, "context": context, "released": False}
         return True
 
-    def _confirm_copy_repeat(self, vk, release_tick):
+    def _confirm_copy_release(self, vk):
         with self._lock:
-            queued = self._pending.get("queued_repeat") if self._pending else None
-            if queued is not None and queued["vk"] == vk:
-                last_tick = self._last_input_tick()
-                if last_tick is not None:
-                    queued["input_ticks"] = (last_tick, release_tick)
+            if self._pending is None:
+                return
+            for key in ("queued_repeat", "auto_retry_guard"):
+                retry = self._pending.get(key)
+                if retry is not None and retry["vk"] == vk:
+                    retry["released"] = True
+
+    def _observe_copy_mouse_message(self, message):
+        reason = _COPY_MOUSE_ACTIONS.get(message)
+        if reason is not None:
+            self._invalidate_copy_retries(reason)
+
+    def _invalidate_copy_retries(self, reason):
+        if self._pending is None:
+            return
+        with self._lock:
+            pending = self._pending
+            if pending is not None:
+                for key in ("queued_repeat", "auto_retry_guard", "armed_retry"):
+                    retry = pending.get(key)
+                    if retry is not None:
+                        retry.setdefault("invalidated", reason)
+
+    def _copy_retry_blocker(self, pending, retry, foreground):
+        if self._stop_event.is_set() or not self._mouse_hook_id:
+            return "input_guard_unavailable"
+        if "invalidated" in retry:
+            return retry["invalidated"]
+        if not retry["released"]:
+            return "key_not_released"
+        context = retry["context"]
+        if not self._same_source_window(context, foreground):
+            return "source_changed"
+        if pending["clipboard_notified"] or foreground["clipboard_sequence_before"] != context["clipboard_sequence_before"]:
+            return "clipboard_changed"
+        return None
+
+    def _maybe_wake_early_copy_retry(self, pending, now):
+        retry_at = pending.get("early_retry_at")
+        retry = pending.get("auto_retry_guard")
+        if retry_at is None or now < retry_at or retry is None or not retry["released"]:
+            return
+        pending.pop("early_retry_at")
+        if "invalidated" not in retry:
+            pending["early_retry_posted"] = self._wake_keyboard()
 
     def _expire_copy_request(self):
-        # Caller holds _lock. Only an explicit repeat can be sent after a no-response timeout.
+        # Caller holds _lock. A retry needs the original field and no new clipboard publication.
         pending = self._pending
-        queued = pending.get("queued_repeat")
         previous = pending["context"]
-        if queued is not None and previous["capture_stage"] == "waiting_clipboard":
-            context = queued["context"]
-            foreground = self._foreground_capture_context()
-            if self._stop_event.is_set() or self._last_input_tick() not in queued["input_ticks"]:
-                previous["capture_retry_skipped"] = "input_changed"
-            elif not self._same_source_window(context, foreground):
-                previous["capture_retry_skipped"] = "source_changed"
-            elif pending["clipboard_notified"] or foreground["clipboard_sequence_before"] != context["clipboard_sequence_before"]:
-                previous["capture_retry_skipped"] = "clipboard_changed"
+        retry = pending.get("queued_repeat") or pending.get("auto_retry_guard")
+        if previous["capture_stage"] == "waiting_clipboard":
+            self._note_clipboard_timeout(pending)
+        if previous["capture_stage"] == "waiting_clipboard" and retry is not None:
+            explicit = retry is pending.get("queued_repeat")
+            mode = "explicit_hotkey" if explicit else "automatic_timeout"
+            reason = self._copy_retry_blocker(pending, retry, self._foreground_capture_context())
+            if reason:
+                previous.update(capture_retry_skipped=reason, capture_retry_mode=mode)
             else:
+                context = retry["context"]
+                context["capture_retry_mode"] = mode
+                if not explicit:
+                    context["capture_attempt"] = 2
                 replacement = self._new_copy_request(pending["monitor"], context, False, time.perf_counter())
-                replacement["retry_input_ticks"] = queued["input_ticks"]
+                replacement["armed_retry"] = retry
                 self._pending = replacement
                 if not self._wake_keyboard():
                     self._abandon_pending("clipboard_dispatch_failed")
@@ -251,19 +307,9 @@ class WindowsHotkeyHookMixin:
         self._abandon_pending("clipboard_timeout")
 
     @staticmethod
-    def _last_input_tick():
-        class LastInputInfo(ctypes.Structure):
-            _fields_ = [("cbSize", wintypes.UINT), ("dwTime", wintypes.DWORD)]
-
-        last_input = LastInputInfo(ctypes.sizeof(LastInputInfo))
-        if ctypes.windll.user32.GetLastInputInfo(ctypes.byref(last_input)):
-            return last_input.dwTime
-        return None
-
-    @staticmethod
     def _copy_input_blocker():
         key_state = ctypes.windll.user32.GetAsyncKeyState
-        if any(key_state(vk) & 0x8000 for vk in (0x01, 0x02)):
+        if any(key_state(vk) & 0x8000 for vk in (0x01, 0x02, 0x04, 0x05, 0x06)):
             return "mouse"
         modifiers = (0x10, 0x11, 0x12, 0x5B, 0x5C)  # Shift, Ctrl, Alt and Windows
         if any(key_state(vk) & 0x8000 for vk in modifiers):
@@ -284,13 +330,28 @@ class WindowsHotkeyHookMixin:
         # Called outside LowLevelKeyboardProc on the same keyboard thread.
         with self._lock:
             pending = self._pending
-            if pending is None or pending["sent"] or self._stop_event.is_set():
+            if pending is None or self._stop_event.is_set():
+                return
+            early_retry = pending.pop("early_retry_posted", False)
+            if pending["sent"] and (not early_retry or pending["context"]["capture_stage"] != "waiting_clipboard"):
                 return
             if time.perf_counter() >= pending["deadline"]:
                 self._expire_copy_request()
                 return
             context = pending["context"]
             foreground = self._foreground_capture_context()
+            if early_retry:
+                retry = pending["auto_retry_guard"]
+                reason = self._copy_retry_blocker(pending, retry, foreground) or self._copy_input_blocker()
+                if reason:
+                    context.update(capture_retry_skipped=reason, capture_retry_mode="automatic_early")
+                    return  # Keep the first request alive, including any clipboard response that just arrived.
+                context.update(capture_attempt=2, capture_retry_mode="automatic_early")
+                pending.pop("auto_retry_guard")
+            elif pending.get("armed_retry", {}).get("invalidated"):
+                context["capture_retry_skipped"] = pending["armed_retry"]["invalidated"]
+                self._abandon_pending("selection_may_have_changed")
+                return
             if not self._same_source_window(context, foreground):
                 self._abandon_pending("source_window_changed")
                 return
@@ -299,14 +360,16 @@ class WindowsHotkeyHookMixin:
                 context["clipboard_sequence_latest"] = foreground["clipboard_sequence_before"]
                 self._abandon_pending("clipboard_superseded")
                 return
-            if ("retry_input_ticks" in pending
-                    and self._last_input_tick() not in pending["retry_input_ticks"]):
-                self._abandon_pending("selection_may_have_changed")
-                return
             blocker = self._copy_input_blocker()
             if blocker:
                 context.update(capture_stage="waiting_input_release", copy_waited_for_input=blocker)
                 return
+            opener = self._clipboard_open_by(context["source_pid"])
+            if early_retry or "armed_retry" in pending:
+                context["clipboard_open_at_retry"] = opener
+                context["capture_retry_ms"] = round((time.perf_counter() - context["trigger_perf"]) * 1000, 1)
+            else:
+                context["clipboard_open_at_dispatch"] = opener
             pending["clipboard_notified"] = False
             context["clipboard_notified"] = False
             pending["sent"] = True
@@ -317,14 +380,22 @@ class WindowsHotkeyHookMixin:
             if self._pending is not pending:
                 return
             pending["sending"] = False
+            if early_retry or "armed_retry" in pending:
+                context["capture_retry_dispatched"] = sent
+            if early_retry and not sent:
+                context.update(capture_stage="waiting_clipboard", capture_retry_skipped="dispatch_failed")
+                return  # The first command can still answer before its original deadline.
             context["send_input_accepted"] = sent
             if not sent:
                 self._abandon_pending("clipboard_send_failed")
                 return
             now = time.perf_counter()
-            context["dispatch_ms"] = round((now - context["trigger_perf"]) * 1000, 1)
+            context.setdefault("dispatch_ms", round((now - context["trigger_perf"]) * 1000, 1))
             context["capture_stage"] = "waiting_clipboard"
             pending["deadline"] = now + CLIPBOARD_COPY_TIMEOUT_SEC
+            if (pending.get("auto_retry_guard") and self._mouse_hook_id
+                    and self._process_name_from_pid(context["source_pid"]).casefold() == "telegram.exe"):
+                pending["early_retry_at"] = now + _TELEGRAM_RETRY_AFTER_SEC
         self._wake_reader()
 
     def _windows_keyboard_hook_loop(self):
@@ -363,16 +434,26 @@ class WindowsHotkeyHookMixin:
                 event = ctypes.cast(address, ctypes.POINTER(KeyboardEvent)).contents
                 if self._dispatch_keyboard(
                     event.vkCode, is_down=message in (0x0100, 0x0104),
-                    flags=event.flags, pressed=pressed, suppressed=suppressed, input_tick=event.time,
+                    flags=event.flags, pressed=pressed, suppressed=suppressed, from_hook=True,
+                    own_copy=event.dwExtraInfo == _COPY_INPUT_MARKER,
                 ):
                     return 1
             return user32.CallNextHookEx(self._hook_id, code, message, address)
+
+        def mouse_proc(code, message, address):
+            if code == 0:
+                self._observe_copy_mouse_message(message)
+            return user32.CallNextHookEx(self._mouse_hook_id, code, message, address)
 
         msg = wintypes.MSG()
         user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, 0)
         self._thread_id = kernel32.GetCurrentThreadId()
         hook = prototype(hook_proc)
-        self._hook_id = user32.SetWindowsHookExW(13, hook, kernel32.GetModuleHandleW(None), 0)
+        mouse_hook = prototype(mouse_proc)
+        instance = kernel32.GetModuleHandleW(None)
+        self._hook_id = user32.SetWindowsHookExW(13, hook, instance, 0)
+        if self._hook_id:
+            self._mouse_hook_id = user32.SetWindowsHookExW(14, mouse_hook, instance, 0)
         self._hook_ready_event.set()
         if not self._hook_id:
             return
@@ -386,6 +467,9 @@ class WindowsHotkeyHookMixin:
                 else:
                     user32.DispatchMessageW(ctypes.byref(msg))
         finally:
+            if self._mouse_hook_id:
+                user32.UnhookWindowsHookEx(self._mouse_hook_id)
+                self._mouse_hook_id = None
             user32.UnhookWindowsHookEx(self._hook_id)
             self._hook_id = None
             self._thread_id = None
@@ -429,5 +513,5 @@ class WindowsHotkeyHookMixin:
         inputs = (Input * len(keys))()
         for item, (vk, flags) in zip(inputs, keys):
             item.type = 1  # INPUT_KEYBOARD
-            item.value.keyboard = KeyboardInput(vk, 0, flags, 0, 0)
+            item.value.keyboard = KeyboardInput(vk, 0, flags, 0, _COPY_INPUT_MARKER)
         return user32.SendInput(len(inputs), inputs, ctypes.sizeof(Input)) == len(inputs)

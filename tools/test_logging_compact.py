@@ -196,6 +196,31 @@ def main() -> int:
         assert held["copy_waited_for_input"] == "mouse" and held["capture_retry_of"] == 6
         assert text_summary["key_stats"]["text_paste_failures"] == 1
 
+        retry_log = ProblemLogger()
+        retry_log.event(
+            "global_copy_capture_rejected", capture_protocol=7, capture_id=10, reason="clipboard_timeout",
+            capture_stage="waiting_clipboard", capture_repeat_id=11, capture_retry_mode="explicit_hotkey",
+            capture_retry_skipped="mouse_button", clipboard_open_at_dispatch="other_window",
+            clipboard_open_at_timeout="no_window_reported", clipboard_sequence_changed=False,
+        )
+        retry_log.event_bytes_written = session_module.EVENTS_SESSION_SOFT_LIMIT_BYTES
+        retry_log.event(
+            "global_copy_text_captured", capture_protocol=7, capture_id=12, capture_stage="appended",
+            capture_mouse_guard=True, capture_attempt=2, capture_retry_mode="automatic_early",
+            capture_retry_dispatched=True, capture_retry_ms=427, clipboard_open_at_retry="no_window_reported",
+        )
+        retry_log.close()
+        retry_summary = json.loads((retry_log.session_dir / "AI_READ_FIRST.json").read_text(encoding="utf-8"))
+        skipped = next(record for record in retry_summary["recent_signals"] if record.get("capture_id") == 10)
+        assert skipped["capture_repeat_id"] == 11 and skipped["capture_retry_skipped"] == "mouse_button"
+        assert skipped["clipboard_open_at_dispatch"] == "other_window"
+        assert skipped["clipboard_sequence_changed"] is False
+        recovered = next(record for record in retry_summary["recent_signals"] if record.get("capture_id") == 12)
+        assert recovered["capture_stage"] == "appended" and recovered["capture_retry_dispatched"] is True
+        assert recovered["capture_retry_ms"] == 427 and recovered["capture_mouse_guard"] is True
+        assert any(json.loads(line).get("capture_id") == 12 for line in retry_log.events_file.read_text(
+            encoding="utf-8").splitlines())
+
         preview_log = ProblemLogger()
         endpoint_voice = types.SimpleNamespace(AudioOutput=types.SimpleNamespace(
             Id="FAKE-ENDPOINT-ID", GetDescription=lambda: "Fake output",

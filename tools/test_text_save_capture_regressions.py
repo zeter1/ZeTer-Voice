@@ -143,10 +143,12 @@ class CaptureRegressions(unittest.TestCase):
     def setUp(self):
         self.root = Mock()
         self.service = WindowsCopyCapture(self.root)
+        self.service._mouse_hook_id = 1
         self.service._wake_reader = Mock()
         self.service._wake_keyboard = Mock()
         self.service._send_ctrl_c_to_active_window = Mock(return_value=True)
         self.service._copy_input_blocker = Mock(return_value=None)
+        self.service._clipboard_open_by = Mock(return_value="no_window_reported")
         self.service._process_name_from_pid = lambda pid: "source.exe"
         self.sequence, self.pid, self.hwnd = 10, 901234, 901235
         self.focus = None
@@ -558,15 +560,146 @@ class CaptureRegressions(unittest.TestCase):
         ])
         self.assertEqual(self.service._send_ctrl_c_to_active_window.call_count, 2)
 
+    def start_physical_f8(self):
+        self.register("F8")
+        pressed, suppressed = set(), set()
+        self.assertTrue(self.service._dispatch_keyboard(
+            0x77, is_down=True, flags=0, pressed=pressed, suppressed=suppressed, from_hook=True,
+        ))
+        self.service._send_pending_copy()
+        self.assertTrue(self.service._dispatch_keyboard(
+            0x77, is_down=False, flags=0, pressed=pressed, suppressed=suppressed, from_hook=True,
+        ))
+        return pressed, suppressed
+
+    def test_f8_retries_no_response_once_without_a_second_press(self):
+        self.start_physical_f8()
+        self.service._pending["deadline"] = 0
+        self.service._wait_for_clipboard_change()
+        self.service._send_pending_copy()
+        self.snapshot_update("Повторная команда\r\nЮникод 🧪")
+        self.snapshot_update("Запоздалая публикация")
+        self.assertEqual(self.delivered(), [("F8", "Повторная команда\r\nЮникод 🧪", None)])
+        self.assertEqual(self.results[0][1]["capture_id"], 1)
+        self.assertEqual(self.results[0][1]["capture_attempt"], 2)
+        self.assertEqual(self.service._send_ctrl_c_to_active_window.call_count, 2)
+
+    def test_telegram_f8_retries_promptly_even_if_cursor_moves(self):
+        self.service._process_name_from_pid = lambda pid: "Telegram.exe"
+        started = time.perf_counter()
+        with patch("tts_app.windows_hotkey_capture.time.perf_counter", return_value=started) as clock:
+            self.start_physical_f8()
+            self.service._observe_copy_mouse_message(0x0200)  # WM_MOUSEMOVE
+            clock.return_value = started + 0.2
+            self.service._wait_for_clipboard_change()
+            self.service._send_pending_copy()
+            self.service._send_ctrl_c_to_active_window.assert_called_once()
+            clock.return_value = started + 0.5
+            self.service._wait_for_clipboard_change()
+            self.service._send_pending_copy()
+            self.snapshot_update("Текст из Telegram")
+        self.assertEqual(self.delivered(), [("F8", "Текст из Telegram", None)])
+        self.assertEqual(self.results[0][1]["capture_attempt"], 2)
+        self.assertEqual(self.results[0][1]["capture_retry_mode"], "automatic_early")
+        self.assertEqual(self.results[0][1]["capture_retry_ms"], 500)
+        self.assertIs(self.results[0][1]["capture_retry_dispatched"], True)
+        self.assertEqual(self.service._send_ctrl_c_to_active_window.call_count, 2)
+
+    def test_telegram_f8_preserves_first_response_when_retry_was_already_posted(self):
+        self.service._process_name_from_pid = lambda pid: "Telegram.exe"
+        started = time.perf_counter()
+        with patch("tts_app.windows_hotkey_capture.time.perf_counter", return_value=started) as clock:
+            self.start_physical_f8()
+            clock.return_value = started + 0.5
+            self.service._wait_for_clipboard_change()
+            self.assertEqual(self.service._wake_keyboard.call_count, 2)
+            self.sequence += 1
+            self.service._send_pending_copy()
+            self.snapshot = self.sequence, "Первый ответ успел", None
+            self.service._wait_for_clipboard_change()
+        self.assertEqual(self.delivered(), [("F8", "Первый ответ успел", None)])
+        self.service._send_ctrl_c_to_active_window.assert_called_once()
+
+    def test_telegram_f8_does_not_retry_after_mouse_button_or_wheel(self):
+        for message, reason in ((0x0201, "mouse_button"), (0x020A, "mouse_wheel")):
+            with self.subTest(reason=reason):
+                self.setUp()
+                self.service._process_name_from_pid = lambda pid: "Telegram.exe"
+                self.start_physical_f8()
+                self.service._observe_copy_mouse_message(message)
+                self.service._pending["deadline"] = 0
+                self.service._wait_for_clipboard_change()
+                self.service._send_pending_copy()
+                self.assertEqual(self.delivered(), [("F8", None, "clipboard_timeout")])
+                self.assertEqual(self.results[0][1]["capture_retry_skipped"], reason)
+                self.service._send_ctrl_c_to_active_window.assert_called_once()
+
+    def test_telegram_f8_does_not_retry_without_mouse_guard(self):
+        self.service._mouse_hook_id = None
+        self.service._process_name_from_pid = lambda pid: "Telegram.exe"
+        self.start_physical_f8()
+        self.service._pending["deadline"] = 0
+        self.service._wait_for_clipboard_change()
+        self.service._send_pending_copy()
+        self.assertEqual(self.delivered(), [("F8", None, "clipboard_timeout")])
+        self.assertEqual(self.results[0][1]["capture_retry_skipped"], "input_guard_unavailable")
+        self.assertFalse(self.results[0][1]["capture_mouse_guard"])
+        self.service._send_ctrl_c_to_active_window.assert_called_once()
+
+    def test_f8_cancels_auto_retry_if_input_or_source_changes(self):
+        for change in ("input", "focus", "clipboard"):
+            with self.subTest(change=change):
+                self.setUp()
+                self.start_physical_f8()
+                if change == "input":
+                    self.service._observe_copy_mouse_message(0x0201)
+                elif change == "focus":
+                    self.focus = self.hwnd + 1
+                else:
+                    self.sequence += 1
+                self.service._pending["deadline"] = 0
+                self.service._wait_for_clipboard_change()
+                self.service._send_pending_copy()
+                self.assertEqual(self.delivered(), [("F8", None, "clipboard_timeout")])
+                self.service._send_ctrl_c_to_active_window.assert_called_once()
+
+    def test_f8_auto_retry_expires_without_sending_a_third_copy(self):
+        self.start_physical_f8()
+        for _ in range(2):
+            self.assertIsNotNone(self.service._pending)
+            self.service._pending["deadline"] = 0
+            self.service._wait_for_clipboard_change()
+            self.service._send_pending_copy()
+        self.assertEqual(self.delivered(), [("F8", None, "clipboard_timeout")])
+        self.assertEqual(self.results[0][1]["capture_attempt"], 2)
+        self.assertEqual(self.service._send_ctrl_c_to_active_window.call_count, 2)
+
+    def test_f8_rechecks_other_keys_before_dispatching_auto_retry(self):
+        pressed, suppressed = self.start_physical_f8()
+        self.service._pending["deadline"] = 0
+        self.service._wait_for_clipboard_change()
+        self.service._dispatch_keyboard(
+            0x28, is_down=False, flags=0, pressed=pressed, suppressed=suppressed, from_hook=True,
+        )
+        self.service._send_pending_copy()
+        self.assertEqual(self.delivered(), [("F8", None, "selection_may_have_changed")])
+        self.service._send_ctrl_c_to_active_window.assert_called_once_with()
+
+    def test_f8_first_response_prevents_auto_retry(self):
+        self.start_physical_f8()
+        self.snapshot_update("Первый ответ")
+        self.service._wait_for_clipboard_change()
+        self.assertEqual(self.delivered(), [("F8", "Первый ответ", None)])
+        self.service._send_ctrl_c_to_active_window.assert_called_once_with()
+
     def repeat_f8_during_no_response(self):
         self.register("F8")
-        self.service._last_input_tick = Mock(return_value=501)
         self.request(0x77)
         self.service._send_pending_copy()
         keys = set(), set()
-        for down, tick in ((True, 501), (False, 502)):
+        for down in (True, False):
             self.assertTrue(self.service._dispatch_keyboard(
-                0x77, is_down=down, flags=0, pressed=keys[0], suppressed=keys[1], input_tick=tick,
+                0x77, is_down=down, flags=0, pressed=keys[0], suppressed=keys[1], from_hook=True,
             ))
 
     def test_repeated_f8_is_kept_until_no_response_deadline(self):
@@ -582,12 +715,15 @@ class CaptureRegressions(unittest.TestCase):
 
     def test_repeated_f8_is_cancelled_after_other_input(self):
         self.repeat_f8_during_no_response()
-        self.service._last_input_tick.return_value = 900
+        self.service._observe_copy_mouse_message(0x020A)
         self.service._pending["deadline"] = 0
         self.service._wait_for_clipboard_change()
         self.service._send_pending_copy()
         self.assertEqual(self.delivered(), [("F8", None, "clipboard_timeout")])
-        self.assertEqual(self.results[0][1]["capture_retry_skipped"], "input_changed")
+        self.assertEqual(self.results[0][1]["capture_retry_skipped"], "mouse_wheel")
+        self.assertEqual(self.results[0][1]["capture_repeat_id"], 2)
+        self.assertEqual(self.results[0][1]["clipboard_sequence_latest"], 10)
+        self.assertIs(self.results[0][1]["clipboard_sequence_changed"], False)
         self.service._send_ctrl_c_to_active_window.assert_called_once()
 
     def test_repeated_f8_is_cancelled_if_source_changes_after_promotion(self):

@@ -29,6 +29,7 @@ class WindowsCopyCapture(WindowsHotkeyHookMixin):
         self._reader_ready_event = threading.Event()
         self._thread_id = None
         self._hook_id = None
+        self._mouse_hook_id = None
         self._reader_hwnd = None
         self._poll_id = None
 
@@ -114,6 +115,27 @@ class WindowsCopyCapture(WindowsHotkeyHookMixin):
         self._pending = None
         self._report(pending["monitor"], pending["context"], reason=reason)
 
+    def _note_clipboard_timeout(self, pending):
+        context = pending["context"]
+        sequence = self._clipboard_sequence_number()
+        if sequence:
+            context["clipboard_sequence_latest"] = sequence
+            context["clipboard_sequence_changed"] = sequence != context["clipboard_sequence_before"]
+        if pending["monitor"] is not None:
+            context["clipboard_open_at_timeout"] = self._clipboard_open_by(context["source_pid"])
+
+    @staticmethod
+    def _clipboard_open_window():
+        get_open_window = ctypes.windll.user32.GetOpenClipboardWindow
+        get_open_window.restype = wintypes.HWND
+        return get_open_window()
+
+    def _clipboard_open_by(self, source_pid):
+        opener = self._clipboard_open_window()
+        if not opener:
+            return "no_window_reported"
+        return "source" if self._window_pid(opener) == source_pid else "other_window"
+
     def _wait_for_clipboard_change(self, *, clipboard_notification=False):
         # Runs only on the clipboard thread. Never block the keyboard hook or Tk
         # while another process owns/serves the clipboard.
@@ -141,6 +163,7 @@ class WindowsCopyCapture(WindowsHotkeyHookMixin):
                     self._pending = None
                 return
             if sequence == before and not pending["clipboard_notified"]:
+                self._maybe_wake_early_copy_retry(pending, now)
                 return
             owner = self._clipboard_owner_pid()
             context["clipboard_owner_pid"] = owner
@@ -246,8 +269,7 @@ class WindowsCopyCapture(WindowsHotkeyHookMixin):
                 # OpenClipboard may fail even if we cannot identify the opener.
                 # Keep the first verified clipboard owner across read attempts.
                 confirmed_opener = None
-                user32.GetOpenClipboardWindow.restype = wintypes.HWND
-                opener = user32.GetOpenClipboardWindow()
+                opener = self._clipboard_open_window()
                 if (opener and opener == self._clipboard_owner_window()
                         and self._window_pid(opener) == context["source_pid"]):
                     confirmed_opener = opener

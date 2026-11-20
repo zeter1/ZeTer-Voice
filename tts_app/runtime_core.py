@@ -30,7 +30,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 
 
 APP_TITLE = "ZeTer Voice"
-APP_VERSION = "4.2.4 FULL"
+APP_VERSION = "4.2.5"
 
 DEFAULT_VOICE_HINT = "Microsoft Irina Desktop"
 EDITOR_FONT_DEFAULT = 13

@@ -208,6 +208,7 @@ class ProblemLoggerEventsMixin:
         event_type = str(record.get("event") or "")
         if not (
             self._is_high_value_event(event_type)
+            or (event_type == "global_copy_text_captured" and record.get("capture_retry_dispatched") is True)
             or event_type in {
                 "preview_started",
                 "preview_finished",
@@ -224,7 +225,8 @@ class ProblemLoggerEventsMixin:
             self.recent_signal_events = self.recent_signal_events[-RECENT_SIGNAL_EVENTS_LIMIT:]
 
     def _suppress_event(self, event_type: str, compact_fields: dict) -> bool:
-        if self._is_high_value_event(event_type):
+        if (self._is_high_value_event(event_type)
+                or (event_type == "global_copy_text_captured" and compact_fields.get("capture_retry_dispatched") is True)):
             return False
 
         now_perf = time.perf_counter()
