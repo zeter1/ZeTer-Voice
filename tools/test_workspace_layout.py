@@ -337,6 +337,10 @@ class WorkspaceLayoutTests(unittest.TestCase):
             notebook.index(f"@{plus.winfo_x()},{plus.winfo_height() // 2}")
 
     def test_white_layout_collapses_and_reopens_without_losing_editor(self):
+        # A small Windows runner desktop can cap the default window size.
+        wide_width = max(1420, self.task.sidebar_content.winfo_reqwidth() + 800)
+        self.root.maxsize(wide_width, max(776, self.root.maxsize()[1]))
+        self.resize(wide_width)
         self.assertEqual(self.task.text_box.cget("background").lower(), "#ffffff")
         self.assertTrue(self.task.sidebar.winfo_ismapped())
         self.assertGreater(self.task.sidebar.winfo_rootx(), self.task.text_box.winfo_rootx())
