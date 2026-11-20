@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from .i18n import tr
 from .runtime import *
-from .workspace_theme import ACCENT, ACCENT_WASH, FOCUS
+from .workspace_theme import ACCENT, ACCENT_WASH, FOCUS, INK, WHITE
 
 class ClosableNotebook(ttk.Notebook):
     """
@@ -28,10 +29,17 @@ class ClosableNotebook(ttk.Notebook):
         self.bind("<ButtonRelease-1>", self._on_drag_release, add="+")
         self.bind("<Unmap>", self._clear_drag, add="+")
         self._new_tab_layout_id = None
+        self._new_tab_hint_id = None
+        self._new_tab_hint: tk.Label | None = None
         self.new_tab_button = None
         if new_tab is not None:
-            self.new_tab_button = ttk.Button(self, text="+", width=2, style="Plus.TButton", command=new_tab)
-            # The plus is outside the real tab list. Reserve its width so even
+            self.new_tab_button = ttk.Button(
+                self, text=tr("Новая вкладка"), style="NewTab.TButton", cursor="hand2", command=new_tab,
+            )
+            self.new_tab_button.bind("<Enter>", self._schedule_new_tab_hint)
+            for event in ("<Leave>", "<ButtonPress>", "<Unmap>", "<Destroy>"):
+                self.new_tab_button.bind(event, self._hide_new_tab_hint)
+            # The button is outside the real tab list. Reserve its width so even
             # squeezed tabs and their close icons stay separately clickable.
             reserve = self.new_tab_button.winfo_reqwidth() + 2
             ttk.Style(self).configure("ClosableNotebook", tabmargins=(0, 0, reserve, 0))
@@ -55,6 +63,37 @@ class ClosableNotebook(ttk.Notebook):
     def destroy(self) -> None:
         self._clear_drag()
         super().destroy()
+
+    def _schedule_new_tab_hint(self, event) -> None:
+        self._hide_new_tab_hint()
+        if not event.widget.instate(("disabled",)):
+            self._new_tab_hint_id = event.widget.after(450, self._show_new_tab_hint)
+
+    def _hide_new_tab_hint(self, _event=None) -> None:
+        if self._new_tab_hint_id is not None:
+            self.new_tab_button.after_cancel(self._new_tab_hint_id)
+            self._new_tab_hint_id = None
+        if self._new_tab_hint is not None:
+            self._new_tab_hint.destroy()
+            self._new_tab_hint = None
+
+    def _show_new_tab_hint(self) -> None:
+        self._new_tab_hint_id = None
+        button = self.new_tab_button
+        if not button.winfo_ismapped() or button.instate(("disabled",)):
+            return
+        root = self.winfo_toplevel()
+        hint = tk.Label(
+            root, text=button.cget("text") + "\n" + tr("Открывает пустую вкладку для озвучивания текста и сохранения в MP3."),
+            background=INK, foreground=WHITE, justify="left", font=("Segoe UI", 10),
+            wraplength=310, padx=13, pady=8, borderwidth=0,
+        )
+        x = button.winfo_rootx() - root.winfo_rootx()
+        x = max(8, min(x, root.winfo_width() - hint.winfo_reqwidth() - 8))
+        y = button.winfo_rooty() - root.winfo_rooty() + button.winfo_height() + 6
+        hint.place(x=x, y=y)
+        hint.lift()
+        self._new_tab_hint = hint
 
     def _schedule_new_tab_button(self, _event=None) -> None:
         if self.new_tab_button is not None and self._new_tab_layout_id is None:
@@ -85,6 +124,8 @@ class ClosableNotebook(ttk.Notebook):
                 low = middle + 1
             else:
                 high = middle
+        if low != button.winfo_x():
+            self._hide_new_tab_hint()
         button.place(x=low, y=0)
 
     def _build_close_style(self, master) -> None:

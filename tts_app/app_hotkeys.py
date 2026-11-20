@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from .i18n import tr
+from .conversion_notifications import ConversionNotifications
+from .hotkey_capture_guidance import CAPTURE_FAILURE_GUIDANCE, CAPTURE_TIMEOUT_GUIDANCE, CLIPBOARD_SOURCE_CHECK_DETAIL
 
 from .runtime import *
 from .problem_logger import ProblemLogger
@@ -11,22 +13,18 @@ from .windows_tools import *
 from .widgets import *
 
 
-CAPTURE_FAILURE_STATUS = {
-    "capture_busy": "Предыдущий захват ещё идёт. После завершения выделите текст снова и повторите.",
-    "clipboard_empty": "Буфер не получил текста. Проверьте выделение и повторите.",
-    "clipboard_dispatch_failed": "Не удалось передать команду копирования. Нажмите горячую клавишу ещё раз.",
-    "clipboard_owner_changed": "Буфер обновило другое приложение. Выделите текст снова и повторите.",
-    "clipboard_read_failed": "Не удалось прочитать текст из буфера. Выделите его и повторите.",
-    "clipboard_send_failed": "Windows не принял команду копирования. Выделите текст и повторите.",
-    "clipboard_superseded": "Копирования наложились. Выделите текст и повторите захват по одному разу.",
-    "clipboard_timeout": "Источник не прислал текст вовремя. Проверьте выделение и нажмите горячую клавишу ещё раз.",
-}
-
 CAPTURE_LOG_FIELDS = (
     "capture_id", "capture_protocol", "capture_stage", "copy_kind",
     "source_process", "source_pid", "copy_latency_ms", "dispatch_ms", "send_input_accepted", "delivery_ms",
     "clipboard_notified", "clipboard_sequence_changed", "clipboard_update_ms",
     "clipboard_owner_pid", "clipboard_unicode_available", "read_attempts",
+    "clipboard_conflict", "clipboard_source_lock_confirmed", "clipboard_sequence_advanced_after_lock",
+    "clipboard_sequence_advanced_at_open", "clipboard_sequence_advanced_after_busy",
+    "clipboard_sequence_before", "clipboard_sequence_observed", "clipboard_sequence_latest",
+    "clipboard_open_busy_count", "clipboard_busy_opener", "clipboard_source_check",
+    "clipboard_sequence_before_open", "clipboard_owner_sample",
+    "blocked_by_capture_id", "blocked_by_capture_stage",
+    "copy_waited_for_input", "capture_retry_of", "capture_retry_skipped",
 )
 
 
@@ -359,18 +357,17 @@ class AppHotkeysMixin:
         if not rejected and (not isinstance(captured, str) or not captured.strip()):
             rejected = "clipboard_empty"
         if rejected:
-            self.logger.event(
-                "global_copy_capture_rejected", reason=rejected, **evidence,
-            )
-            task.status_var.set(tr(CAPTURE_FAILURE_STATUS.get(
-                rejected, "Не удалось захватить текст. Выделите его и повторите.",
-            )))
+            self._report_tab_capture_failure(task, rejected, evidence)
             return
 
         sequence = capture_info["clipboard_sequence_after"]
         if sequence is not None and sequence == getattr(monitor, "_last_appended_capture_sequence", None):
             self.logger.event(
                 "global_copy_duplicate_skipped", clipboard_sequence=sequence, **evidence,
+            )
+            self._report_tab_capture_failure(
+                task, "duplicate_snapshot",
+                dict(evidence, capture_stage="duplicate_check", clipboard_sequence=sequence),
             )
             return
 
@@ -382,14 +379,14 @@ class AppHotkeysMixin:
         try:
             appended = task.append_external_selected_text(captured)
         except (tk.TclError, TypeError, ValueError) as exc:
-            self.logger.event(
-                "global_copy_capture_rejected", reason="append_exception",
-                exception_type=type(exc).__name__, chars=len(captured), **evidence,
+            self._report_tab_capture_failure(
+                task, "append_exception",
+                dict(evidence, exception_type=type(exc).__name__, chars=len(captured)),
             )
             raise
         if not appended:
-            self.logger.event(
-                "global_copy_capture_rejected", reason="append_declined", chars=len(captured), **evidence,
+            self._report_tab_capture_failure(
+                task, "append_declined", dict(evidence, chars=len(captured)),
             )
             return
         monitor._last_appended_capture_sequence = sequence
@@ -397,8 +394,63 @@ class AppHotkeysMixin:
         evidence["capture_stage"] = "appended"
         self.logger.event(
             "global_copy_text_captured", routing_mode="fixed_tab",
-            chars=len(captured), clipboard_changed=True,
+            chars=len(captured), clipboard_changed=True, clipboard_sequence=sequence,
             append_ms=round((time.perf_counter() - append_started) * 1000, 1),
             preview_running=preview_running, paused=paused, auto_read_hotkey_text=auto_read,
             **evidence,
         )
+
+    def _report_tab_capture_failure(self, task: TaskTab, reason: str, evidence: dict) -> None:
+        stage = evidence.get("capture_stage")
+        guidance = CAPTURE_TIMEOUT_GUIDANCE.get(stage, reason) if reason == "clipboard_timeout" else reason
+        if reason == "clipboard_superseded" and evidence.get("clipboard_conflict") in {
+            "before_dispatch", "while_waiting_to_read", "at_snapshot_open",
+        }:
+            guidance = "clipboard_version_changed"
+        detail, check, fix = CAPTURE_FAILURE_GUIDANCE.get(guidance, (
+            "Не удалось захватить текст. Выделите его и повторите.",
+            "Найди соседние события с тем же capture_id и проверь, на каком этапе захват остановился.",
+            "Скопируйте пропущенный фрагмент вручную. Для разбора передайте Codex эту запись и соседние события из этой же сессии.",
+        ))
+        owner = "tts_app/windows_hotkey_capture.py"
+        if reason == "clipboard_send_failed":
+            owner = "tts_app/windows_hotkey_hook.py"
+        elif reason == "duplicate_snapshot":
+            owner = "tts_app/app_hotkeys.py"
+        elif stage == "append_text":
+            owner = "tts_app/task_capture.py"
+        reason_detail = detail
+        if reason == "clipboard_timeout" and stage == "waiting_input_release":
+            reason_detail = "Кнопку мыши или клавишу-модификатор удерживали до конца ожидания. Команда Ctrl+C не отправлялась."
+            check = "Проверь copy_waited_for_input. Повтори с тем же выделением, отпустив кнопку мыши и клавиши сочетания."
+        if reason == "clipboard_timeout" and evidence.get("capture_retry_skipped"):
+            check = "Проверь capture_retry_skipped и состояние исходного окна, ввода и буфера после повторного нажатия."
+        if guidance == "clipboard_version_changed":
+            source_check = evidence.get("clipboard_source_check")
+            if source_check == "owner_unconfirmed":
+                source_check = evidence.get("clipboard_owner_sample", source_check)
+            reason_detail = CLIPBOARD_SOURCE_CHECK_DETAIL.get(source_check, detail)
+        if reason == "clipboard_empty":
+            unicode_available = evidence.get("clipboard_unicode_available")
+            if unicode_available is False:
+                reason_detail = "Буфер обновился, но в нём не оказалось Unicode-текста."
+            elif unicode_available is True:
+                reason_detail = "В буфере был Unicode-текст, но он оказался пустым или содержал только пробельные символы."
+        self.logger.event(
+            "global_copy_capture_rejected", reason=reason, reason_detail=reason_detail,
+            suggested_fix=fix, suggested_check=check, owner_module=owner, **evidence,
+        )
+        message = tr(detail)
+        task.status_var.set(message)
+        try:
+            if not hasattr(self, "completion_notifications"):
+                self.completion_notifications = ConversionNotifications(self.root)
+            self.completion_notifications.show_capture_failure(
+                evidence["hotkey"], message, source_process=evidence.get("source_process") or "",
+                insertion_uncertain=reason == "append_exception",
+            )
+        except (OSError, tk.TclError) as exc:
+            self.logger.event(
+                "global_copy_notification_failed", capture_id=evidence.get("capture_id"),
+                reason=reason, exception_type=type(exc).__name__,
+            )

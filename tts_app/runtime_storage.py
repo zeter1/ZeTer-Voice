@@ -115,6 +115,8 @@ DEFAULT_SETTINGS = {
     "mp3_sample_rate_hz": 44100,
     "mp3_output_dir": "",
     "quiet_mp3_notifications": False,
+    "problem_logs_enabled": True,
+    "problem_logs_retention_days": LOG_RETENTION_DAYS,
     "editor_font_size": EDITOR_FONT_DEFAULT,
     "highlight_current_sentence": True,
     "save_workspace_text": True,
@@ -159,12 +161,18 @@ def normalize_settings(raw: dict | None) -> dict:
     result["editor_font_size"] = clamp_int(
         result["editor_font_size"], EDITOR_FONT_MIN, EDITOR_FONT_MAX, EDITOR_FONT_DEFAULT,
     )
-    for key in ("quiet_mp3_notifications", "highlight_current_sentence", "save_workspace_text", "archive_text_versions"):
+    for key in (
+        "quiet_mp3_notifications", "problem_logs_enabled", "highlight_current_sentence",
+        "save_workspace_text", "archive_text_versions",
+    ):
         if not isinstance(result[key], bool):
             result[key] = DEFAULT_SETTINGS[key]
     days = result["text_backup_retention_days"]
     if type(days) is not int or not 1 <= days <= TEXT_BACKUP_RETENTION_MAX_DAYS:
         result["text_backup_retention_days"] = MP3_TEXT_BACKUP_RETENTION_DAYS
+    log_days = result["problem_logs_retention_days"]
+    if type(log_days) is not int or not 1 <= log_days <= LOG_RETENTION_MAX_DAYS:
+        result["problem_logs_retention_days"] = LOG_RETENTION_DAYS
 
     result["window_geometry"] = str(result.get("window_geometry") or "1200x820")
     result["last_input_dir"] = str(result.get("last_input_dir") or "")
@@ -406,21 +414,30 @@ def ensure_help_files() -> None:
     logs_readme.write_text(
         "ЛОГИ ДЛЯ АНАЛИЗА CHATGPT / CODEX\n"
         "=================================\n\n"
-        "Передавайте нейросети последнюю папку session_.... Обычно ей не нужно читать её целиком.\n\n"
-        "ПОРЯДОК ЧТЕНИЯ (экономит контекст):\n"
-        "1. AI_READ_FIRST.json — маленький индекс проблемы: error_code, stage, owner_module и что открыть дальше.\n"
-        "2. errors/<id>.json — traceback и bounded context только конкретной ошибки.\n"
-        "3. diagnostic_summary.json — статистика, warnings, recent_signals и последние состояния.\n"
-        "4. task_<run_id>.json — итог конкретного MP3-запуска. Успешные задачи сохраняются компактно.\n"
-        "5. events*.jsonl — читать только нужный хвост/ID, если предыдущих файлов недостаточно.\n\n"
+        "Выберите сессию по времени сбоя и проверьте session_id, режим запуска "
+        "и папку данных в session.json (environment.frozen и environment.storage_base). "
+        "Путь к скрипту или тег EXE уточните по запуску.\n"
+        "Для разбора достаточно нужных полей и событий без текста пользователя, "
+        "настроек и полных путей.\n\n"
+        "ПОРЯДОК ЧТЕНИЯ:\n"
+        "1. AI_READ_FIRST.json — целостность записи, первичная ошибка и recent_signals. "
+        "Проверьте diagnostic_emergency.json в папке логов для того же session_id.\n"
+        "2. errors/<id>.json из primary_problem.file — детали конкретной ошибки.\n"
+        "3. task_<run_id>.json — итог конкретной задачи MP3.\n"
+        "4. events*.jsonl — нужные события по времени, ID или этапу.\n"
+        "diagnostic_summary.json — краткий указатель для совместимости.\n\n"
         "ОПТИМИЗАЦИЯ РАЗМЕРА:\n"
         "- точные повторения шумных событий дедуплицируются; счётчик остаётся в summary;\n"
         "- при длинной сессии routine events имеют мягкий лимит, но ошибки/final status не отбрасываются;\n"
         "- одинаковая ошибка группируется по fingerprint в одном errors/*.json с occurrences;\n"
         "- traceback и context ограничиваются по размеру; очевидные secrets редактируются;\n"
         "- добавление текста описывается этапами, размерами и результатом. Исходный текст и фрагменты синтеза не прикладываются.\n\n"
-        "ID: tab_id = вкладка, run_id = создание MP3, preview_run_id = прослушивание.\n"
-        f"Сессии хранятся не более {LOG_RETENTION_DAYS} дней и максимум {LOG_MAX_SESSIONS} папок. "
+        "ID: capture_id = захват текста, tab_id = вкладка, run_id = создание MP3, "
+        "preview_run_id = прослушивание.\n"
+        "Запись и срок хранения меняются в «Настройки → Логи проблем» и действуют со следующего запуска. "
+        "Старые завершённые сессии очищаются при запуске.\n"
+        "При сбое захвата текста найдите global_copy_capture_rejected. Поле reason_detail объясняет сбой, "
+        "suggested_fix подсказывает, что сделать, а suggested_check и owner_module помогают Codex проверить причину.\n"
         f"Routine events ограничены примерно {EVENTS_SESSION_SOFT_LIMIT_BYTES // 1024} КБ на сессию.\n",
         encoding="utf-8",
     )

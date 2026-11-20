@@ -1,6 +1,15 @@
 # CODEMAP — куда идти Codex
 
-Главное правило: **не читать весь проект для локальной задачи**. Сначала найти symbol через `python tools/where.py <имя>`, затем открыть owner-файл ниже. Фасады нужны для стабильных импортов, но обычно не являются местом правки.
+## Куда идти по симптому
+
+| Что видит пользователь | С чего начать | Что должно пройти |
+|---|---|---|
+| F8 пропускает, дублирует или вставляет чужой текст | Найди [событие по capture_id](LOGGING_FOR_AI.md#добавление-текста-и-восстановление-вкладок). Проверь [снимок буфера](../tts_app/windows_hotkey_capture.py) и [доставку во вкладку](../tts_app/app_hotkeys.py). | [Тесты захвата](../tools/test_text_save_capture_regressions.py) и [ручной сценарий](VERIFICATION.md#ручная-проверка-захвата-в-windows). При задержанном обновлении ожидается полный Unicode-текст ровно один раз в назначенной вкладке. |
+| При закрытии пропадает текст | [Сохранение вкладок](../tts_app/app_workspace_save.py) и [завершение окна](../tts_app/app_shutdown.py). | [Тесты закрытия](../tools/test_workspace_shutdown.py). При ошибке записи окно остаётся открытым. Повторная попытка сохраняет свежий текст. |
+| После смены языка программа не перезапускается | [Карточка настроек](../tts_app/mp3_settings_ui.py), [решение о перезапуске](../tts_app/app_shutdown.py) и [запуск новой копии](../tts_app/app.py). | [Тесты закрытия](../tools/test_workspace_shutdown.py). При сбое сохранения перезапуск отменяется. После успеха открывается та же копия с сохранёнными вкладками. |
+| MP3 не возобновляется или готовый файл неполный | [Чтение манифеста восстановления](../tts_app/runtime_recovery.py), затем [этап MP3](WORKER_MAP.md). | [Тесты целостности MP3](../tools/test_mp3_text_integrity.py). При недоступном манифесте фрагменты сохраняются. Готовый MP3 декодируется и проверяется до публикации. |
+
+## Владельцы по подсистемам
 
 | Что меняется | Implementation owner | При необходимости рядом |
 |---|---|---|
@@ -16,13 +25,14 @@
 | compatibility imports старого `runtime` | `tts_app/runtime.py` | implementation owner выше |
 | logger compact/redaction/error classification | `tts_app/problem_logger_compact.py` | `problem_logger_events.py`, `docs/LOGGING_FOR_AI.md` |
 | logger session lifecycle / stale sessions | `tts_app/problem_logger_session.py` | `problem_logger.py` facade |
+| безопасное истечение срока диагностических сессий | `tts_app/problem_log_retention.py` | `problem_logger_session.py`, `runtime_storage.py` |
 | logger warnings/observations/diagnostic insights | `tts_app/problem_logger_insights.py` | `problem_logger_summary.py` |
 | AI_READ_FIRST / diagnostic summary | `tts_app/problem_logger_summary.py` | `problem_logger_compact.py`, insights/events |
 | logger events/stats/errors/task lifecycle | `tts_app/problem_logger_events.py` | — |
 | разбиение текста / bookmark segment helpers | `tts_app/text_processing.py` | — |
 | SAPI voices/devices/synthesize WAV | `tts_app/sapi_core.py` | `runtime_core.py` |
 | дополнительные голоса, hash/путь модели | `tts_app/voice_catalog.py` | `docs/VOICE_ENGINES.md` |
-| private Python source/EXE для worker/installer | `tts_app/engine_runtime.py` | `build_support/prepare_engine_runtime.py` |
+| выбор Python для worker/installer | `tts_app/engine_runtime.py` | [подготовка среды EXE в полном репозитории](https://github.com/zeter1/ZeTer-Voice/blob/main/build_support/prepare_engine_runtime.py) |
 | вкладка установки и удаления движков в настройках | `tts_app/engine_manager_ui.py` | `mp3_settings_ui.py`, `app_shutdown.py` |
 | additive установка / восстановимое удаление | `tts_app/engine_installation.py` | `tools/manage_voice_engine.py`, `voice_catalog.py` |
 | Silero/Edge worker и отменяемый синтез WAV | `tts_app/voice_worker.py`, `tts_app/voice_process.py` | `tools/setup_voices.py` |
@@ -32,12 +42,13 @@
 | FFmpeg executable/concat/final MP3 | `tts_app/ffmpeg_tools.py` | `runtime_audio.py` |
 | Windows autostart / открыть папку | `tts_app/windows_autostart.py` | `runtime_storage.py` |
 | hotkey config/parse/enable/duplicate state | `tts_app/windows_hotkey_config.py` | `windows_hotkeys.py` composition |
-| общий захват Unicode из Windows Clipboard, ожидающая операция и доставка в Tk | `tts_app/windows_hotkey_capture.py` | hotkey config |
-| Windows low-level keyboard hook и SendInput | `tts_app/windows_hotkey_hook.py` | hotkey capture |
+| чтение Unicode, подтверждение владельца буфера и доставка снимка в Tk | `tts_app/windows_hotkey_capture.py` | `windows_hotkey_hook.py`, [контракт захвата](PROJECT.md#захват-текста) |
+| Windows keyboard hook, очередь команд копирования, проверка клавиш и SendInput | `tts_app/windows_hotkey_hook.py` | hotkey capture |
 | строка текстовых вкладок, закрытие и кнопка «+» | `tts_app/widgets.py` | `app_tabs.py` |
 | белая тема окон и элементов Tk | `tts_app/workspace_theme.py` | `app_workspace_init.py` |
 | вкладка «О программе» и контакты | `tts_app/about_ui.py` | `app_workspace_init.py` |
-| вкладка «Настройки», параметры MP3 и переключатель автозапуска | `tts_app/mp3_settings_ui.py` | `mp3_format.py`, `task_conversion_controls.py`, `app_recovery.py` |
+| язык интерфейса и словари | `tts_app/i18n.py`, `tts_app/ui_messages_*.py` | `mp3_settings_ui.py` и `app_shutdown.py` для применения при перезапуске |
+| вкладка «Настройки», MP3, автозапуск и логи проблем | `tts_app/mp3_settings_ui.py` | `runtime_storage.py`, `mp3_format.py`, `app_recovery.py` |
 | редактор, панель чтения и MP3 | `tts_app/task_ui_build.py` | `task_ui_state.py` |
 | боковая панель голоса, звука и захвата текста | `tts_app/task_ui_sidebar.py` | `app_audio_settings.py`, `app_hotkeys.py` |
 | counters/queue/text-state/delete logging | `tts_app/task_ui_status.py` | — |
@@ -55,12 +66,15 @@
 | тяжёлый pipeline `_job_worker` | `tts_app/task_conversion_worker.py` | **сначала `docs/WORKER_MAP.md`**, затем SAPI/FFmpeg/runtime owner |
 | главное окно: init/build/restore workspace | `tts_app/app_workspace_init.py` | `task_tab.py` |
 | создать/переименовать/закрыть вкладку | `tts_app/app_tabs.py` | workspace init |
-| save/debounce workspace | `tts_app/app_workspace_save.py` | runtime storage |
+| запись настроек и реакция на её сбой | `tts_app/app_audio_settings.py` | `runtime_storage.py`, `app_shutdown.py` |
+| автосохранение вкладок, временный манифест и восстановление при сбое записи | `tts_app/app_workspace_save.py` | `runtime_storage.py`, `app_workspace_init.py` |
 | recovery dialogs | `tts_app/app_recovery.py` | runtime recovery |
-| назначение/активация tab hotkeys | `tts_app/app_hotkeys.py` | `windows_hotkey_*` |
+| назначение tab hotkeys, доставка текста во вкладку и подсказки при отказе | `tts_app/app_hotkeys.py` | `windows_hotkey_*`, `task_capture.py` |
+| причины отказа захвата и действия для диагностики | `tts_app/hotkey_capture_guidance.py` | `app_hotkeys.py`, `ui_messages_capture_notifications.py` |
 | голоса/устройства/общие audio settings UI | `tts_app/app_audio_settings.py` | `sapi_core.py` |
 | обработка app event queue | `tts_app/app_event_dispatch.py` | producer конкретного события |
-| постоянные уведомления о готовом MP3 / показать файл | `tts_app/conversion_notifications.py` | `app_event_dispatch.py` принимает `done` на Tk thread |
+| уведомления о готовом MP3 и последнем сбое захвата | `tts_app/conversion_notifications.py` | `app_event_dispatch.py` и `app_hotkeys.py` на главном потоке Tk |
+| оформление и содержимое предупреждения захвата | `tts_app/capture_notification.py` | `conversion_notifications.py`, `workspace_theme.py` |
 | shutdown / close / background threads | `tts_app/app_shutdown.py` | event dispatch |
 
 ## Composition/facade files
@@ -69,8 +83,8 @@
 
 ## Маршрут изменения
 
-1. `python tools/where.py <symbol-or-text>`.
-2. Открыть owner и нужный line range.
-3. При необходимости открыть максимум 1–2 прямые зависимости.
-4. Для `_job_worker` сначала выбрать stage-range по `docs/WORKER_MAP.md`.
-5. После правки: `python tools/verify.py`.
+1. `python -B tools/where.py WindowsCopyCapture` находит определения. Для поиска вызовов используй `rg -n "WindowsCopyCapture" tts_app tools`.
+2. Открой файл, который отвечает за поведение, и нужный участок.
+3. Если для проверки нужно больше контекста, открыть ближайшего вызывающего, владельца состояния и тест.
+4. Для `_job_worker` выбери [этап по метке](WORKER_MAP.md).
+5. После правки проверить сценарий и запустить [проверки на отдельной копии](VERIFICATION.md).

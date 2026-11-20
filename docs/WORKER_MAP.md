@@ -1,23 +1,20 @@
-# MP3 WORKER MAP — точечное чтение `_job_worker`
+# Этапы создания MP3 в `_job_worker`
 
-`tts_app/task_conversion_worker.py` намеренно оставлен одним транзакционным pipeline: recovery checkpoints, error context и cleanup используют общее локальное состояние. Вместо рискованного переписывания функции Codex должен читать её по `CODEX-REGION` диапазонам.
+[Код конвертации](../tts_app/task_conversion_worker.py) использует общее состояние задания для восстановления, диагностики и очистки. Найди границы нужного этапа по меткам `CODEX-REGION`.
 
-| Region | Lines | Что там |
-|---|---:|---|
-| `worker-bootstrap` | 31–129 | pywin32 init, counters, hashes, base context |
-| `split-output-recovery` | 130–342 | split, output dir, FFmpeg discovery, recovery manifest, disk baseline |
-| `sapi-generation` | 343–750 | chunk loop, confirmed WAV checkpoints, retries, diagnostics |
-| `ffmpeg-assembly` | 751–1011 | concat to a staged file, progress callback, cancellation |
-| `validate-success` | 1012–1264 | full decode and sample count, atomic publication, success events |
-| `cancellation` | 1265–1319 | InterruptedError / user cancel path |
-| `failure-recovery` | 1320–1463 | error diagnostics, recovery preservation, user message |
-| `final-cleanup` | 1464–1477 | staged-file cleanup, stage reset, CoUninitialize |
+~~~powershell
+rg -n 'CODEX-REGION' tts_app/task_conversion_worker.py
+~~~
 
-Быстрый поиск:
+| Метка | Что там |
+|---|---|
+| `worker-bootstrap` | Инициализация COM, счётчики, хеши и контекст задания |
+| `split-output-recovery` | Разбиение текста, выбор папки, поиск FFmpeg, манифест и оценка места |
+| `sapi-generation` | Синтез фрагментов, проверка и сохранение WAV, повтор при временном отказе |
+| `ffmpeg-assembly` | Сборка во временный файл, прогресс и отмена |
+| `validate-success` | Полное декодирование, сверка отсчётов, публикация файла и сообщение об успехе |
+| `cancellation` | Действия при отмене задания |
+| `failure-recovery` | Диагностика сбоя, сохранение данных восстановления и сообщение пользователю |
+| `final-cleanup` | Очистка временного файла, завершение этапа и освобождение COM |
 
-```bash
-python tools/where.py CODEX-REGION
-python tools/where.py report_ffmpeg_progress
-```
-
-Если задача относится к одной стадии, открывай только её range + прямой helper (`sapi_*`, `ffmpeg_tools.py`, `runtime_recovery.py` и т.п.). Полный worker нужен только для cross-stage lifecycle/recovery изменений.
+Для правки одной стадии открой этот участок и ближайший вспомогательный модуль. Если меняются отмена, восстановление или публикация, проверь переходы между стадиями. [Проверки MP3 и восстановления](VERIFICATION.md#проверки-по-подсистемам)

@@ -1,6 +1,7 @@
 """Interface translations selected once at startup."""
 from . import (
     ui_messages_capture,
+    ui_messages_capture_notifications,
     ui_messages_conversion,
     ui_messages_engines,
     ui_messages_main,
@@ -25,6 +26,7 @@ _MESSAGES = {
     **ui_messages_engines.MESSAGES,
     **ui_messages_playback.MESSAGES,
     **ui_messages_capture.MESSAGES,
+    **ui_messages_capture_notifications.MESSAGES,
     **ui_messages_conversion.MESSAGES,
     **ui_messages_recovery.MESSAGES,
 }

@@ -2,14 +2,16 @@ from __future__ import annotations
 
 from .runtime import *
 from .problem_logger_compact import write_log_json
+from .problem_log_retention import cleanup_expired_log_sessions, read_owned_log_session
 
 class ProblemLoggerSessionMixin:
-    def __init__(self) -> None:
+    def __init__(self, *, recording_enabled: bool = True, retention_days: int = LOG_RETENTION_DAYS) -> None:
         self.lock = threading.Lock()
         self.state_lock = threading.RLock()
         self.session_write_lock = threading.Lock()
         self.summary_lock = threading.Lock()
-        self.disabled = False
+        self.recording_enabled = recording_enabled
+        self.disabled = not recording_enabled
         self.diagnostic_integrity = "ok"
         self.diagnostic_failure_count = 0
 
@@ -100,12 +102,14 @@ class ProblemLoggerSessionMixin:
         }
 
         try:
-            # Detect crashes before retention cleanup so even an old unclean
-            # session can be summarized into the new diagnostic report.
-            self.previous_unclean_sessions = (
-                self._detect_unclean_previous_sessions()
-            )
-            self._cleanup_old_sessions()
+            if self.recording_enabled:
+                self.previous_unclean_sessions = self._detect_unclean_previous_sessions()
+            cleanup_failures = cleanup_expired_log_sessions(LOGS_DIR, retention_days)
+            if not self.recording_enabled:
+                return
+            if cleanup_failures:
+                self.diagnostic_integrity = "degraded"
+                self.diagnostic_failure_count = cleanup_failures
 
             self.errors_dir.mkdir(parents=True, exist_ok=True)
             self._write_session("running")
@@ -131,10 +135,13 @@ class ProblemLoggerSessionMixin:
                     "previous_session_unclean_shutdown",
                     **item,
                 )
+            if cleanup_failures:
+                self.event("problem_log_cleanup_failed", failed_sessions=cleanup_failures)
 
             self._write_diagnostic_summary("running")
         except Exception as exc:
-            self._record_diagnostic_failure("session_init", exc)
+            if self.recording_enabled:
+                self._record_diagnostic_failure("session_init", exc)
 
     def _record_diagnostic_failure(self, stage: str, exc: BaseException) -> None:
         """One bounded independent record; never recurse through event()."""
@@ -175,50 +182,17 @@ class ProblemLoggerSessionMixin:
             # The emergency record already owns diagnostic failure evidence.
             pass
 
-    def _cleanup_old_sessions(self) -> None:
-        LOGS_DIR.mkdir(parents=True, exist_ok=True)
-        cutoff = datetime.now() - timedelta(days=LOG_RETENTION_DAYS)
-
-        sessions: list[tuple[float, Path]] = []
-        for path in LOGS_DIR.glob("session_*"):
-            if not path.is_dir():
-                continue
-            try:
-                stat = path.stat()
-            except OSError:
-                continue
-
-            if datetime.fromtimestamp(stat.st_mtime) < cutoff:
-                shutil.rmtree(path, ignore_errors=True)
-                continue
-
-            sessions.append((stat.st_mtime, path))
-
-        sessions.sort(reverse=True)
-        # Keep room for the session being created now.
-        for _, path in sessions[max(0, LOG_MAX_SESSIONS - 1):]:
-            shutil.rmtree(path, ignore_errors=True)
-
     def _detect_unclean_previous_sessions(self) -> list[dict]:
         detected: list[dict] = []
 
-        for session_dir in sorted(
-            LOGS_DIR.glob("session_*"),
-            key=lambda path: path.stat().st_mtime if path.exists() else 0,
-            reverse=True,
-        ):
+        for session_dir in sorted(LOGS_DIR.glob("session_*"), reverse=True):
             session_file = session_dir / "session.json"
-            if not session_file.exists():
-                continue
-
             try:
-                payload = json.loads(
-                    session_file.read_text(encoding="utf-8")
-                )
-            except Exception:
+                payload = read_owned_log_session(session_dir)
+            except OSError:
                 continue
 
-            if payload.get("status") != "running":
+            if payload is None or payload.get("status") != "running":
                 continue
 
             environment = payload.get("environment")

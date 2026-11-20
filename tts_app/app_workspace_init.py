@@ -40,7 +40,11 @@ class AppWorkspaceInitMixin:
                     return
         set_language(self.settings.get("ui_language", DEFAULT_LANGUAGE))
         self.workspace_text_enabled = self.settings.get("save_workspace_text", True)
-        self.logger = ProblemLogger()
+        recording_enabled = self.settings.get("problem_logs_enabled", True)
+        self.logger = ProblemLogger(
+            recording_enabled=recording_enabled,
+            retention_days=self.settings.get("problem_logs_retention_days", LOG_RETENTION_DAYS),
+        )
         try:
             moved = migrate_text_storage()
             ensure_help_files()
@@ -60,7 +64,8 @@ class AppWorkspaceInitMixin:
             self.logger.event("text_storage_migrated", directories=moved)
         self.exception_hooks = ExceptionHooks(root, self.logger)
         self.ui_watchdog = UiStallMonitor(root, self.logger)
-        self.ui_watchdog.start()
+        if recording_enabled:
+            self.ui_watchdog.start()
 
         # One Speed value for the whole application and all tabs.
         self.global_rate_var = tk.IntVar(

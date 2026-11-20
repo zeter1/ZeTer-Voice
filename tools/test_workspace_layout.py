@@ -218,7 +218,7 @@ class WorkspaceLayoutTests(unittest.TestCase):
         self.assertEqual(widths, [widths[0]] * 3)
         notebook = self.app.notebook
         plus = notebook.new_tab_button
-        self.assertEqual(plus.cget("text"), "+")
+        self.assertEqual(plus.cget("text"), "Новая вкладка")
         before = plus.winfo_x()
         self.task.set_tab_title("Название вкладки стало заметно длиннее")
         self.root.update()
@@ -401,7 +401,7 @@ class WorkspaceLayoutTests(unittest.TestCase):
         self.resize(900)
         page = self.root.nametowidget(sections.select())
         groups, = page.winfo_children()
-        general, _texts, _engines = groups.winfo_children()
+        general, _texts, _engines, _logs = groups.winfo_children()
         mp3, _startup = general.winfo_children()
         children = mp3.winfo_children()
         fields = [widget for widget in children if isinstance(widget, ttk.Combobox)]
@@ -441,7 +441,7 @@ class WorkspaceLayoutTests(unittest.TestCase):
         tabs.select(1)
         self.root.update()
         groups, = self.root.nametowidget(tabs.select()).winfo_children()
-        general, texts, _engines = groups.winfo_children()
+        general, texts, _engines, _logs = groups.winfo_children()
         mp3 = general.winfo_children()[0]
         folder_buttons = next(widget for widget in mp3.winfo_children() if isinstance(widget, ttk.Frame))
         configured = str(ROOT / "tmp")
@@ -494,7 +494,7 @@ class WorkspaceLayoutTests(unittest.TestCase):
         self.root.update()
         page = self.root.nametowidget(sections.select())
         groups, = page.winfo_children()
-        general, _texts, _engines = groups.winfo_children()
+        general, _texts, _engines, _logs = groups.winfo_children()
         _mp3, system = general.winfo_children()
         _notifications, startup, _language = system.winfo_children()
         toggle = next(widget for widget in startup.winfo_children() if isinstance(widget, ttk.Checkbutton))
@@ -509,6 +509,34 @@ class WorkspaceLayoutTests(unittest.TestCase):
                 self.assertFalse(self.app.settings["autostart_windows"])
         else:
             self.assertTrue(toggle.instate(["disabled"]))
+
+    def test_problem_log_controls_save_recording_and_retention(self):
+        sections = self.app.section_notebook
+        sections.select(1)
+        groups, = self.root.nametowidget(sections.select()).winfo_children()
+        logs = next(tab for tab in groups.tabs() if groups.tab(tab, "text") == "Логи проблем")
+        groups.select(logs)
+        self.root.update()
+        card, = self.root.nametowidget(logs).winfo_children()
+        toggle = next(widget for widget in card.winfo_children() if isinstance(widget, ttk.Checkbutton))
+        days = next(widget for widget in card.winfo_children() if isinstance(widget, ttk.Spinbox))
+        self.assertTrue(toggle.instate(["selected"]))
+        self.assertEqual(days.get(), "10")
+        toggle.invoke()
+        days.set("5")
+        with patch("tts_app.mp3_settings_ui.messagebox.askyesno", side_effect=(False, True)) as confirm:
+            days.event_generate("<FocusOut>")
+            self.assertEqual(days.get(), "10")
+            days.set("5")
+            days.event_generate("<FocusOut>")
+        self.assertEqual(confirm.call_count, 2)
+        days.set("121")
+        days.event_generate("<FocusOut>")
+        self.assertEqual(days.get(), "5")
+        self.assertTrue(self.app.save_settings())
+        saved = load_settings()
+        self.assertFalse(saved["problem_logs_enabled"])
+        self.assertEqual(saved["problem_logs_retention_days"], 5)
 
     def test_interface_language_is_saved_and_keeps_the_current_session(self):
         sections = self.app.section_notebook
@@ -571,9 +599,9 @@ class WorkspaceLayoutTests(unittest.TestCase):
         groups, = page.winfo_children()
         self.assertEqual(
             [groups.tab(tab, "text") for tab in groups.tabs()],
-            ["Общие", "Текст и резервные копии", "Голосовые движки"],
+            ["Общие", "Текст и резервные копии", "Голосовые движки", "Логи проблем"],
         )
-        general, _texts, engines = groups.winfo_children()
+        general, _texts, engines, _logs = groups.winfo_children()
         manager = self.app.engine_manager
         self.assertIs(engines, manager.frame)
         mp3 = general.winfo_children()[0]

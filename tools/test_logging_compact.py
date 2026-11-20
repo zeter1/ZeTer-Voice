@@ -8,6 +8,7 @@ import shutil
 import contextlib
 import io
 import types
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 SOURCE_ROOT = Path(__file__).resolve().parent.parent
@@ -25,9 +26,51 @@ from tts_app.sapi_preview_diagnostics import PreviewPlaybackError, preview_sapi_
 assert session_module.STORAGE_BASE_DIR.resolve() == ROOT
 
 
+def verify_recording_and_retention():
+    log_root = ROOT / "retention fixture"
+    log_root.mkdir()
+    session_module.LOGS_DIR = log_root
+    now = datetime.now(timezone.utc)
+
+    def session(number, days, *, status="closed", name=None):
+        identity = f"2026-09-01_12-00-00_{number:06x}"
+        directory = log_root / (name or f"session_{identity}")
+        directory.mkdir()
+        (directory / "session.json").write_text(json.dumps({
+            "schema": 2, "app": {"name": "ZeTer Voice", "version": "4.2.4 FULL"},
+            "session_id": identity, "status": status, "environment": {"pid": 123},
+            "updated_at": (now - timedelta(days=days)).isoformat(),
+        }), encoding="utf-8")
+        return directory
+
+    expired = session(1, 8)
+    recent = [session(number, 2) for number in range(2, 19)]
+    active = session(19, 9, status="running")
+    foreign = session(20, 9, name="session_my_notes")
+    with_note = session(21, 9)
+    note = with_note / "Мои заметки.txt"
+    note.write_text("Keep me", encoding="utf-8")
+    logger = ProblemLogger(recording_enabled=False, retention_days=7)
+    logger.event("app_start")
+    logger.task_started("fixture", {})
+    logger.task_progress("fixture", step=1)
+    logger.task_finished("fixture", "success", {})
+    logger.error(task_id="fixture", stage="test", exc=ValueError("fixture"), traceback_text="", context={})
+    logger.close()
+    assert not expired.exists()
+    assert all(path.is_dir() for path in recent)
+    assert active.is_dir() and foreign.is_dir() and note.read_text(encoding="utf-8") == "Keep me"
+    assert not logger.session_dir.exists()
+    assert not (log_root / "diagnostic_emergency.json").exists()
+    resumed = ProblemLogger(retention_days=7)
+    resumed.close()
+    assert resumed.ai_read_first_file.is_file()
+
+
 def main() -> int:
     original_logs_dir = session_module.LOGS_DIR
     try:
+        verify_recording_and_retention()
         test_root = ROOT / "synthetic logs"
         session_module.LOGS_DIR = test_root
         logger = ProblemLogger()
@@ -118,9 +161,20 @@ def main() -> int:
 
         text_log = ProblemLogger()
         text_log.event(
-            "global_copy_capture_rejected", capture_protocol=2, capture_id=7,
-            reason="clipboard_timeout", capture_stage="clipboard_open_busy", source_process="fixture.exe",
+            "global_copy_capture_rejected", capture_protocol=4, capture_id=7,
+            reason="clipboard_superseded", capture_stage="clipboard_open_busy", source_process="fixture.exe",
             clipboard_notified=True, send_input_accepted=True, read_attempts=3,
+            clipboard_open_busy_count=3, clipboard_busy_opener="unknown", clipboard_source_check="source_focus_changed",
+            clipboard_sequence_before=10, clipboard_sequence_observed=11, clipboard_sequence_latest=14,
+            clipboard_sequence_before_open=13, clipboard_owner_sample="owner_window_changed",
+        )
+        text_log.event(
+            "global_copy_capture_rejected", capture_protocol=3, capture_id=8, reason="capture_busy",
+            capture_stage="trigger", blocked_by_capture_id=7, blocked_by_capture_stage="clipboard_open_busy",
+        )
+        text_log.event(
+            "global_copy_capture_rejected", capture_protocol=5, capture_id=9, reason="clipboard_timeout",
+            capture_stage="waiting_input_release", copy_waited_for_input="mouse", capture_retry_of=6,
         )
         text_log.event("text_paste_rejected", source="paste_button", stage="clipboard_read",
                        reason="clipboard_unavailable")
@@ -129,6 +183,17 @@ def main() -> int:
         signal = next(record for record in text_summary["recent_signals"] if record.get("capture_id") == 7)
         assert signal["capture_stage"] == "clipboard_open_busy" and signal["read_attempts"] == 3
         assert signal["send_input_accepted"] is True and signal["source_process"] == "fixture.exe"
+        assert signal["clipboard_open_busy_count"] == 3 and signal["clipboard_busy_opener"] == "unknown"
+        assert signal["clipboard_source_check"] == "source_focus_changed"
+        assert signal["clipboard_sequence_before_open"] == 13
+        assert signal["clipboard_owner_sample"] == "owner_window_changed"
+        assert [signal[key] for key in (
+            "clipboard_sequence_before", "clipboard_sequence_observed", "clipboard_sequence_latest",
+        )] == [10, 11, 14]
+        blocked = next(record for record in text_summary["recent_signals"] if record.get("capture_id") == 8)
+        assert blocked["blocked_by_capture_id"] == 7 and blocked["blocked_by_capture_stage"] == "clipboard_open_busy"
+        held = next(record for record in text_summary["recent_signals"] if record.get("capture_id") == 9)
+        assert held["copy_waited_for_input"] == "mouse" and held["capture_retry_of"] == 6
         assert text_summary["key_stats"]["text_paste_failures"] == 1
 
         preview_log = ProblemLogger()

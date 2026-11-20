@@ -20,7 +20,9 @@ Python, `pywin32`, and FFmpeg are included. Keep the `runtime` folder beside the
 
 ![ZeTer Voice editor with text tabs, voice settings, and MP3 export](docs/screenshots/zeter-voice-editor-20261120.jpg)
 
-[MP3 and interface settings](docs/screenshots/zeter-voice-settings-20261120.jpg) · [Voice engines](docs/screenshots/zeter-voice-engines-20261120.jpg)
+![MP3 and interface settings](docs/screenshots/zeter-voice-settings-20261120.jpg)
+
+![Installing Silero and Microsoft Edge](docs/screenshots/zeter-voice-engines-20261120.jpg)
 
 ## Interface language
 
@@ -107,6 +109,8 @@ py "ZeTer Voice.py"
 3. Configure the MP3 parameters.
 4. Start saving.
 5. For long jobs, recovery data is stored so a partially completed process does not always need to restart from zero after a failure.
+
+When capture fails, a notification shows the reason and what to try next. In **Settings → Problem logs**, you can enable or disable logging and keep logs for 1 to 120 days.
 
 ## Architecture
 

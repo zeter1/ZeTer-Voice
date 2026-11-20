@@ -88,6 +88,24 @@ def _apply_workspace_elements(root, style):
     ))
     style.layout("TButton", _rename_element(style.layout("TButton"), "Button.border", "Voice.Button.border"))
     style.layout("Primary.TButton", _rename_element(style.layout("TButton"), "Voice.Button.border", "Voice.Primary.border"))
+    element("Voice.NewTab.border", ACCENT, ACCENT, radius=10, states=(
+        ("disabled", DISABLED, DISABLED), ("pressed", "#202c8c", "#202c8c"),
+        ("active focus", "#2b38aa", "#8694f2"), ("focus", ACCENT, "#8694f2"),
+        ("active", "#2b38aa", "#2b38aa"),
+    ))
+    icon_size = max(13, round(root.winfo_fpixels("10p"))) | 1
+    plus = tk.PhotoImage(master=root, width=icon_size, height=icon_size)
+    center = icon_size // 2
+    plus.put(WHITE, to=(0, center, icon_size, center + 1))
+    plus.put(WHITE, to=(1, center - 1, icon_size - 1, center + 2))
+    plus.put(WHITE, to=(center, 0, center + 1, icon_size))
+    plus.put(WHITE, to=(center - 1, 1, center + 2, icon_size - 1))
+    images.append(plus)
+    style.element_create("Voice.NewTab.plus", "image", plus, sticky="")
+    style.layout("NewTab.TButton", _rename_element(
+        _rename_element(style.layout("TButton"), "Voice.Button.border", "Voice.NewTab.border"),
+        "Button.label", "Voice.NewTab.plus",
+    ))
     style.layout("Contact.TButton", _rename_element(style.layout("TButton"), "Voice.Button.border", "Voice.Contact.border"))
     style.layout("Link.TButton", [
         ("Button.focus", {"sticky": "nsew", "children": [
@@ -169,7 +187,7 @@ def apply_workspace_theme(root: tk.Tk) -> None:
         style.map(control, background=[("pressed", ACCENT_WASH), ("active", "#f0f4fa")])
         style.configure(f"Compact.{control}", padding=(6, 5))
     style.configure("Primary.TButton", background=ACCENT_WASH, foreground=ACCENT, font=("Segoe UI", 10, "bold"))
-    style.configure("Plus.TButton", padding=(7, 3), font=("Segoe UI", 15), foreground=MUTED)
+    style.configure("NewTab.TButton", padding=(12, 10), focuscolor=WHITE)
     style.configure("Link.TButton", padding=(3, 4), foreground=ACCENT, width=0, anchor="w")
     style.map("Link.TButton", foreground=[("active", "#18268e")])
     style.configure("Contact.TButton", padding=(14, 10), foreground=ACCENT, font=("Segoe UI", 11), width=0, anchor="w")

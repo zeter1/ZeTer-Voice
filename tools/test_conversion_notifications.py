@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import queue
 import shutil
 import sys
@@ -20,9 +21,111 @@ for source in (SOURCE_ROOT / "tts_app").glob("*.py"):
 sys.path.insert(0, str(ROOT))
 from tts_app import runtime
 from tts_app.app_event_dispatch import AppEventDispatchMixin
+from tts_app.app_hotkeys import AppHotkeysMixin
 from tts_app.conversion_notifications import ConversionNotifications, reveal_audio_file
+from tts_app.problem_logger import ProblemLogger
 
 assert runtime.STORAGE_BASE_DIR.resolve() == ROOT
+
+
+class CaptureFailureTests(unittest.TestCase):
+    def setUp(self):
+        self.app = AppHotkeysMixin()
+        self.task = types.SimpleNamespace(
+            task_id="task", workspace_id="tab", status_var=Mock(),
+            preview_thread=None, preview_is_paused=False,
+            auto_read_hotkey_var=Mock(), append_external_selected_text=Mock(return_value=True),
+        )
+        self.app.tab_hotkey_monitors = {
+            "tab": types.SimpleNamespace(enabled=True, get_hotkey=lambda: "F8"),
+        }
+        self.app._task_by_workspace_id = lambda workspace_id: self.task
+        self.app.shutdown_in_progress = False
+        self.app.logger = ProblemLogger()
+        self.app.completion_notifications = Mock()
+
+    def test_clipboard_timeout_popup_and_problem_logs_agree(self):
+        self.app._on_tab_copy_hotkey("tab", {
+            "capture_id": 7, "capture_rejected": "clipboard_timeout",
+            "capture_stage": "clipboard_open_busy", "captured_text": "PRIVATE_FIXTURE_TEXT",
+            "source_process": "test-editor.exe",
+        })
+        self.app.completion_notifications.show_capture_failure.assert_called_once()
+        hotkey, message = self.app.completion_notifications.show_capture_failure.call_args.args[:2]
+        self.assertEqual(hotkey, "F8")
+        self.assertEqual(self.app.completion_notifications.show_capture_failure.call_args.kwargs["source_process"],
+                         "test-editor.exe")
+        self.assertIn("открыть буфер", message)
+        self.task.status_var.set.assert_called_once_with(message)
+        self.task.append_external_selected_text.assert_not_called()
+        self.app.logger.close()
+        for file in (self.app.logger.events_file, self.app.logger.ai_read_first_file):
+            raw = file.read_text(encoding="utf-8")
+            self.assertNotIn("PRIVATE_FIXTURE_TEXT", raw)
+            if file == self.app.logger.events_file:
+                records = [json.loads(line) for line in raw.splitlines()]
+            else:
+                records = json.loads(raw)["recent_signals"]
+            record = next(item for item in records if item["event"] == "global_copy_capture_rejected")
+            self.assertEqual(record["reason"], "clipboard_timeout")
+            self.assertEqual(record["capture_id"], 7)
+            self.assertEqual(record["capture_stage"], "clipboard_open_busy")
+            self.assertEqual(record["reason_detail"], message)
+            self.assertIn("clipboard_open_busy", record["suggested_check"])
+            self.assertIn("менеджер буфера", record["suggested_fix"])
+            self.assertEqual(record["owner_module"], "tts_app/windows_hotkey_capture.py")
+
+    def test_fix_depends_on_the_observed_stage(self):
+        self.app.logger = Mock()
+        for reason, stage, expected in (
+            ("clipboard_timeout", "waiting_clipboard", "Ctrl+C"),
+            ("clipboard_timeout", "reading_unicode", "короткий фрагмент"),
+            ("clipboard_send_failed", "send_input", "от администратора"),
+        ):
+            with self.subTest(reason=reason, stage=stage):
+                self.app._on_tab_copy_hotkey("tab", {"capture_rejected": reason, "capture_stage": stage})
+                record = self.app.logger.event.call_args.kwargs
+                self.assertIn(expected, record["suggested_fix"])
+
+    def test_empty_clipboard_details_preserve_the_observed_format(self):
+        self.app.logger = Mock()
+        for available, expected in ((False, "не оказалось Unicode-текста"), (True, "пустым")):
+            self.app._on_tab_copy_hotkey("tab", {
+                "capture_rejected": "clipboard_empty", "clipboard_unicode_available": available,
+            })
+            self.assertIn(expected, self.app.logger.event.call_args.kwargs["reason_detail"])
+
+    def test_editor_refusal_allows_retry_and_duplicate_reports_no_insertion(self):
+        self.app.logger = Mock()
+        self.task.append_external_selected_text.side_effect = (False, True)
+        snapshot = {
+            "capture_stage": "snapshot_ready", "captured_text": "synthetic",
+            "clipboard_sequence_after": 42,
+        }
+        for _ in range(3):
+            self.app._on_tab_copy_hotkey("tab", snapshot)
+        self.assertEqual(self.task.append_external_selected_text.call_count, 2)
+        first, second = self.app.completion_notifications.show_capture_failure.call_args_list
+        self.assertIn("вкладка", first.args[1].lower())
+        self.assertIn("уже добавлен", second.args[1].lower())
+        self.assertEqual([call.args[0] for call in self.app.logger.event.call_args_list], [
+            "global_copy_capture_rejected", "global_copy_text_captured",
+            "global_copy_duplicate_skipped", "global_copy_capture_rejected",
+        ])
+        self.assertEqual(self.app.logger.event.call_args.kwargs["reason"], "duplicate_snapshot")
+
+    def test_popup_error_keeps_original_capture_failure(self):
+        logger = self.app.logger = Mock()
+        self.app.completion_notifications.show_capture_failure.side_effect = OSError("synthetic")
+        self.app._on_tab_copy_hotkey("tab", {
+            "capture_id": 8, "capture_rejected": "clipboard_owner_changed",
+        })
+        self.task.status_var.set.assert_called_once()
+        rejected, notification = logger.event.call_args_list
+        self.assertEqual(rejected.args[0], "global_copy_capture_rejected")
+        self.assertEqual(rejected.kwargs["capture_id"], 8)
+        self.assertEqual(notification.args[0], "global_copy_notification_failed")
+        self.assertEqual(notification.kwargs["capture_id"], 8)
 
 
 class CompletionDispatchTests(unittest.TestCase):
@@ -111,8 +214,11 @@ class CompletionDispatchTests(unittest.TestCase):
 class NotificationTkTests(unittest.TestCase):
     def setUp(self):
         import tkinter as tk
+        from tts_app.workspace_theme import apply_workspace_theme
+
         self.root = tk.Tk()
         self.root.withdraw()
+        apply_workspace_theme(self.root)
         self.manager = ConversionNotifications(self.root)
         self.errors = []
         self.root.report_callback_exception = lambda *error: self.errors.append(error)
@@ -219,6 +325,65 @@ class NotificationTkTests(unittest.TestCase):
         self.assertFalse(thread.is_alive())
         self.assertEqual(len(errors), 1)
         self.assertEqual(self.manager.windows, [])
+
+    def test_capture_warning_stays_open_until_cross_during_mixed_outcomes(self):
+        from tts_app.conversion_notifications import notification_work_area
+
+        self.root.deiconify()
+        self.root.update()
+        self.root.iconify()
+        self.root.update()
+        self.manager.show(ROOT / "Готово.mp3")
+        audio = self.manager.windows[0]
+        task = types.SimpleNamespace(
+            task_id="task", workspace_id="tab", status_var=Mock(),
+            preview_thread=None, preview_is_paused=False, auto_read_hotkey_var=Mock(),
+            append_external_selected_text=Mock(return_value=True),
+        )
+        monitor = types.SimpleNamespace(enabled=True, get_hotkey=lambda: "F8")
+        app = AppHotkeysMixin()
+        app.root, app.completion_notifications = self.root, self.manager
+        app.shutdown_in_progress, app.logger = False, Mock()
+        app._task_by_workspace_id = {"tab": task}.get
+        app.tab_hotkey_monitors = {"tab": monitor}
+        app._on_tab_copy_hotkey("tab", {
+            "capture_id": 1, "capture_rejected": "clipboard_timeout", "source_process": "editor.exe",
+        })
+        warning = self.manager.windows[-1]
+        app._on_tab_copy_hotkey("tab", {
+            "capture_id": 2, "captured_text": "Fixture", "clipboard_sequence_after": 77,
+            "source_process": "browser.exe",
+        })
+        self.assertTrue(warning.winfo_viewable())
+        task.append_external_selected_text.assert_called_once_with("Fixture")
+
+        monitor.get_hotkey = lambda: "Ctrl+C"
+        app._on_tab_copy_hotkey("tab", {
+            "capture_id": 3, "capture_rejected": "clipboard_read_failed", "source_process": "browser.exe",
+        })
+        self.root.update()
+        self.assertEqual(self.manager.windows, [audio, warning])
+        self.assertTrue(warning.winfo_viewable())
+        self.assertTrue(warning.attributes("-topmost"))
+        self.assertFalse(self.root.tk.call("after", "info"))
+        self.assertTrue(self.root.state() == "iconic" or not self.root.winfo_viewable())
+        _, _, right, bottom = notification_work_area(self.root)
+        self.assertEqual(warning.winfo_rootx() + warning.winfo_width(), right - 12)
+        self.assertEqual(warning.winfo_rooty() + warning.winfo_height(), bottom - 12)
+        self.assertLess(audio.winfo_rooty() + audio.winfo_height(), warning.winfo_rooty())
+        self.assertIn("Ctrl+C", warning.title())
+        card = self.manager._capture_card
+        self.assertEqual(card.heading["text"], "Текст не скопирован")
+        self.assertEqual(card.hotkey["text"], "Ctrl+C")
+        self.assertEqual(card.count["text"], "Сбоев: 2")
+        self.assertEqual(card.source["text"], "browser.exe")
+        self.assertIn("Не удалось прочитать", card.reason["text"])
+        self.assertTrue(card.advice.winfo_viewable())
+        next(button for button in self.buttons(warning) if button["text"] == "×").invoke()
+        self.assertEqual(self.manager.windows, [audio])
+        self.assertFalse(warning.winfo_exists())
+        self.manager.show_capture_failure("Ctrl+C", "Проверьте выделение.")
+        self.assertEqual(self.manager._capture_card.count["text"], "Сбоев: 1")
 
     def test_two_completion_events_create_two_independent_windows_on_tk_thread(self):
         def task():

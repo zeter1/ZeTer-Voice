@@ -8,7 +8,9 @@ from tkinter import filedialog, messagebox, ttk
 from .engine_manager_ui import EngineManager
 from .mp3_format import BITRATES, CHANNELS, SAMPLE_RATES
 from .runtime_storage import DEFAULT_SETTINGS
-from .runtime_core import EDITOR_FONT_MIN, EDITOR_FONT_MAX, TEXT_BACKUP_RETENTION_MAX_DAYS
+from .runtime_core import (
+    EDITOR_FONT_MIN, EDITOR_FONT_MAX, LOG_RETENTION_MAX_DAYS, TEXT_BACKUP_RETENTION_MAX_DAYS,
+)
 
 
 MP3_CHOICES = (
@@ -28,6 +30,8 @@ def build_settings_page(parent: ttk.Notebook, app) -> ttk.Frame:
     settings_tabs.add(texts, text=tr("Текст и резервные копии"))
     app.engine_manager = EngineManager(app, settings_tabs)
     settings_tabs.add(app.engine_manager.frame, text=tr("Голосовые движки"))
+    logs = ttk.Frame(settings_tabs)
+    settings_tabs.add(logs, text=tr("Логи проблем"))
 
     output_dir = _setting_variable(page, app, "mp3_output_dir", tk.StringVar)
     quiet = _setting_variable(page, app, "quiet_mp3_notifications", tk.BooleanVar)
@@ -45,6 +49,7 @@ def build_settings_page(parent: ttk.Notebook, app) -> ttk.Frame:
     _add_language(_card(system, 0, tr("Язык интерфейса"), row=2), app)
     _add_editor(_card(texts, 0, tr("Редактор")), font_size, highlight)
     _add_backups(_card(texts, 1, tr("Текст и резервные копии")), save_text, archive_versions, app)
+    _add_problem_logs(_card(logs, 0, tr("Логи проблем")), app)
     return page
 
 
@@ -207,15 +212,35 @@ def _add_backups(
         card, text=tr("Копии версий при автосохранении"), variable=archive_versions, style="Switch.Card.TCheckbutton",
     ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(10, 2))
     _note(card, 4, tr("Защитные копии перед очисткой вкладки и созданием MP3 сохраняются отдельно."))
-    ttk.Label(card, text=tr("Срок хранения копий, дней"), style="Card.TLabel").grid(
-        row=5, column=0, sticky="w", padx=(0, 12), pady=(10, 0),
+    _add_retention_control(
+        card, app, row=5, key="text_backup_retention_days", max_days=TEXT_BACKUP_RETENTION_MAX_DAYS,
+        label="Срок хранения копий, дней", title="Срок хранения резервных копий",
+        confirmation="При плановой очистке копии старше {0} дн. будут удалены. Применить этот срок?",
     )
-    key = "text_backup_retention_days"
-    days = ttk.Spinbox(card, from_=1, to=TEXT_BACKUP_RETENTION_MAX_DAYS, width=6)
+
+
+def _add_problem_logs(card: ttk.Frame, app) -> None:
+    enabled = _setting_variable(card, app, "problem_logs_enabled", tk.BooleanVar)
+    ttk.Checkbutton(
+        card, text=tr("Записывать логи проблем"), variable=enabled, style="Switch.Card.TCheckbutton",
+    ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, 4))
+    _note(card, 2, tr("Изменения действуют после перезапуска. При запуске программа удаляет завершённые логи старше выбранного срока."))
+    _add_retention_control(
+        card, app, row=3, key="problem_logs_retention_days", max_days=LOG_RETENTION_MAX_DAYS,
+        label="Срок хранения логов, дней", title="Срок хранения логов",
+        confirmation="При следующем запуске завершённые логи старше {0} дн. будут удалены. Применить этот срок?",
+    )
+
+
+def _add_retention_control(card, app, *, row, key, max_days, label, title, confirmation) -> None:
+    ttk.Label(card, text=tr(label), style="Card.TLabel").grid(
+        row=row, column=0, sticky="w", padx=(0, 12), pady=(10, 0),
+    )
+    days = ttk.Spinbox(card, from_=1, to=max_days, width=6)
     days.set(str(app.settings.get(key, DEFAULT_SETTINGS[key])))
-    days.grid(row=5, column=1, sticky="w", pady=(10, 0))
+    days.grid(row=row, column=1, sticky="w", pady=(10, 0))
     status = ttk.Label(card, style="Note.Card.TLabel")
-    status.grid(row=6, column=0, columnspan=2, sticky="w", pady=(3, 0))
+    status.grid(row=row + 1, column=0, columnspan=2, sticky="w", pady=(3, 0))
 
     def apply_retention(_event=None) -> None:
         if app.shutdown_in_progress:
@@ -228,12 +253,11 @@ def _add_backups(
         # The confirmation can itself move focus. Restore the committed value
         # first so a nested FocusOut cannot open a second confirmation.
         days.set(str(old_days))
-        if not 1 <= value <= TEXT_BACKUP_RETENTION_MAX_DAYS:
-            status.configure(text=tr("Укажите от 1 до {0} дней.", TEXT_BACKUP_RETENTION_MAX_DAYS))
+        if not 1 <= value <= max_days:
+            status.configure(text=tr("Укажите от 1 до {0} дней.", max_days))
             return
         if value < old_days and not messagebox.askyesno(
-            tr("Срок хранения резервных копий"),
-            tr("При плановой очистке копии старше {0} дн. будут удалены. Применить этот срок?", value),
+            tr(title), tr(confirmation, value),
             parent=app.root, default=messagebox.NO,
         ):
             return

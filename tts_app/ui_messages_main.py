@@ -106,6 +106,20 @@ MESSAGES = {
         "Onglet {0}",
         "Aba {0}",
     ),
+    "Новая вкладка": (
+        "New tab",
+        "Nueva pestaña",
+        "Nowa karta",
+        "Nouvel onglet",
+        "Nova aba",
+    ),
+    "Открывает пустую вкладку для озвучивания текста и сохранения в MP3.": (
+        "Opens an empty tab to read text aloud and save it as MP3.",
+        "Abre una pestaña vacía para leer texto en voz alta y guardarlo como MP3.",
+        "Otwiera pustą kartę do odczytywania tekstu i zapisywania go jako MP3.",
+        "Ouvre un onglet vide pour lire du texte à voix haute et l’enregistrer en MP3.",
+        "Abre uma aba vazia para ler texto em voz alta e salvá-lo como MP3.",
+    ),
     "Переименовать вкладку": (
         "Rename tab",
         "Cambiar nombre de la pestaña",

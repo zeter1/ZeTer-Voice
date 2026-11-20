@@ -186,6 +186,7 @@ class ProblemLoggerEventsMixin:
                 "recovery_jobs_found",
                 "global_copy_capture_rejected",
                 "text_paste_rejected",
+                "problem_log_cleanup_failed",
                 "global_copy_clipboard_timeout",
                 "global_copy_clipboard_read_failed",
                 "workspace_tab_file_delete_failed",
@@ -341,6 +342,8 @@ class ProblemLoggerEventsMixin:
             self._record_diagnostic_failure("event_write", exc)
 
     def task_started(self, task_id: str, payload: dict) -> None:
+        if not self.recording_enabled:
+            return
         with self.state_lock:
             self.tasks_started += 1
             self.active_tasks[task_id] = {
@@ -358,6 +361,8 @@ class ProblemLoggerEventsMixin:
             pass
 
     def task_progress(self, task_id: str, **fields) -> None:
+        if not self.recording_enabled:
+            return
         progress = {
             "ts": now_iso(),
             **fields,
@@ -393,6 +398,8 @@ class ProblemLoggerEventsMixin:
         status: str,
         summary: dict,
     ) -> None:
+        if not self.recording_enabled:
+            return
         with self.state_lock:
             if status == "success":
                 self.tasks_success += 1

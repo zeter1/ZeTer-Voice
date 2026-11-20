@@ -333,12 +333,14 @@ class HotkeyCaptureTests(unittest.TestCase):
             _clipboard_sequence_number=lambda: clipboard.get("sequence"),
             remember_text_and_check_duplicate=lambda text: False,
         )
-        app = types.SimpleNamespace(
+        app = AppHotkeysMixin()
+        vars(app).update(
             shutdown_in_progress=False,
             root=types.SimpleNamespace(clipboard_get=lambda: clipboard["text"]),
             _task_by_workspace_id=lambda workspace_id: tab,
             tab_hotkey_monitors={"capture-tab": monitor},
             logger=types.SimpleNamespace(event=lambda name, **fields: events.append((name, fields))),
+            completion_notifications=Mock(),
         )
         def capture(text, sequence=None):
             clipboard["text"] = text
@@ -435,7 +437,9 @@ class HotkeyCaptureTests(unittest.TestCase):
         })
         self.assertEqual(appended, [])
         self.assertFalse(any(name == "global_copy_text_captured" for name, _ in events))
-        self.assertIn("нажмите горячую клавишу ещё раз", status.call_args.args[0])
+        message = status.call_args.args[0].lower()
+        self.assertIn("открыть буфер обмена", message)
+        self.assertIn("нажмите горячую клавишу ещё раз", message)
         name, evidence = events[-1]
         self.assertEqual(name, "global_copy_capture_rejected")
         self.assertEqual(evidence["capture_id"], 7)
@@ -445,6 +449,29 @@ class HotkeyCaptureTests(unittest.TestCase):
         self.assertNotIn("source_hwnd", evidence)
         self.assertNotIn("captured_text", evidence)
         self.assertNotIn("DO_NOT_LOG_THIS", repr(evidence))
+
+    def test_clipboard_conflict_reports_which_check_failed_without_text_or_handles(self):
+        _, _, appended, events, app = self.make_capture(return_app=True)
+        AppHotkeysMixin._on_tab_copy_hotkey(app, "capture-tab", {
+            "capture_rejected": "clipboard_superseded", "captured_text": "PRIVATE_FIXTURE",
+            "capture_id": 35, "capture_protocol": 4, "capture_stage": "checking_clipboard",
+            "clipboard_conflict": "at_snapshot_open", "clipboard_source_check": "owner_unconfirmed",
+            "clipboard_owner_sample": "owner_window_changed", "clipboard_sequence_before_open": 13,
+            "clipboard_open_busy_count": 1, "clipboard_busy_opener": "unknown",
+            "clipboard_source_owner_hwnd": 123, "clipboard_sequence_observed": 11, "clipboard_sequence_latest": 14,
+        })
+        self.assertEqual(appended, [])
+        name, evidence = events[-1]
+        self.assertEqual(name, "global_copy_capture_rejected")
+        self.assertIn("изменилось окно-владелец", evidence["reason_detail"])
+        self.assertIn("clipboard_source_check", evidence["suggested_check"])
+        self.assertEqual(evidence["clipboard_source_check"], "owner_unconfirmed")
+        self.assertEqual(evidence["clipboard_owner_sample"], "owner_window_changed")
+        self.assertEqual(evidence["clipboard_sequence_before_open"], 13)
+        self.assertEqual(evidence["clipboard_busy_opener"], "unknown")
+        self.assertEqual(evidence["clipboard_sequence_latest"], 14)
+        self.assertNotIn("clipboard_source_owner_hwnd", evidence)
+        self.assertNotIn("PRIVATE_FIXTURE", repr(evidence))
 
 if __name__ == "__main__":
     try:

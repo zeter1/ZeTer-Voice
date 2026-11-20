@@ -146,12 +146,14 @@ class CaptureRegressions(unittest.TestCase):
         self.service._wake_reader = Mock()
         self.service._wake_keyboard = Mock()
         self.service._send_ctrl_c_to_active_window = Mock(return_value=True)
+        self.service._copy_input_blocker = Mock(return_value=None)
         self.service._process_name_from_pid = lambda pid: "source.exe"
         self.sequence, self.pid, self.hwnd = 10, 901234, 901235
+        self.focus = None
         self.service._clipboard_sequence_number = lambda: self.sequence
         self.service._clipboard_owner_pid = lambda: self.pid
         self.service._foreground_capture_context = lambda: {
-            "source_hwnd": self.hwnd, "source_pid": self.pid, "source_focus": self.hwnd,
+            "source_hwnd": self.hwnd, "source_pid": self.pid, "source_focus": self.focus or self.hwnd,
             "clipboard_sequence_before": self.sequence, "trigger_perf": time.perf_counter(),
         }
         self.snapshot = None
@@ -206,6 +208,24 @@ class CaptureRegressions(unittest.TestCase):
             ("F9", "Повтор во вторую", None),
         ])
         self.assertEqual(self.service._send_ctrl_c_to_active_window.call_count, 2)
+        self.assertEqual(self.results[0][1]["blocked_by_capture_id"], self.results[1][1]["capture_id"])
+        self.assertEqual(self.results[0][1]["blocked_by_capture_stage"], "waiting_clipboard")
+
+    def test_new_window_capture_can_proceed_if_previous_copy_was_never_sent(self):
+        self.register("F8")
+        self.register("F9")
+        self.assertTrue(self.request(0x77))
+        self.hwnd += 1
+        self.pid += 1
+        self.assertTrue(self.request(0x78))
+        self.service._send_pending_copy()
+        self.service._send_pending_copy()  # A second posted wakeup must not send twice.
+        self.snapshot_update("Новый источник 🧪\r\n")
+        self.assertEqual(self.delivered(), [
+            ("F8", None, "source_window_changed"),
+            ("F9", "Новый источник 🧪\r\n", None),
+        ])
+        self.service._send_ctrl_c_to_active_window.assert_called_once()
 
     def test_ambiguous_native_update_cannot_satisfy_pending_hotkey(self):
         self.register("Ctrl+C")
@@ -249,6 +269,190 @@ class CaptureRegressions(unittest.TestCase):
         self.service._wait_for_clipboard_change()
         self.snapshot_update("Содержимое заменили во время блокировки")
         self.assertEqual(self.delivered()[-1], ("Ctrl+C", None, "clipboard_superseded"))
+
+    def capture_while_source_publishes(self, *, advance_on_open=False, change_owner=False,
+                                      change_focus=False, opener_kind="source", first_open_busy=True,
+                                      advance_during_owner_sample=False, change_sample_owner=False):
+        text = "Тестовый фрагмент 🧪\r\n"
+        raw = ctypes.create_string_buffer(text.encode("utf-16-le") + b"\x00\x00")
+        writer = self.hwnd + 10
+        owner = writer
+
+        def publish_update():
+            nonlocal owner
+            self.sequence += 3
+            if change_owner:
+                owner = writer + 2  # Another clipboard owner in the same process.
+            if change_focus:
+                self.focus = self.hwnd + 1
+
+        def open_clipboard(_handle):
+            if first_open_busy and user.OpenClipboard.call_count == 1:
+                return False
+            if advance_on_open:
+                publish_update()
+            return True
+
+        def get_owner():
+            nonlocal owner
+            current = owner
+            if user.GetClipboardOwner.call_count == 1 and advance_during_owner_sample:
+                self.sequence += 2
+                if change_sample_owner:
+                    owner = writer + 2
+            return current
+
+        user = SimpleNamespace(
+            OpenClipboard=Mock(side_effect=open_clipboard),
+            GetClipboardOwner=Mock(side_effect=get_owner),
+            GetOpenClipboardWindow=Mock(return_value={"source": writer, "other": writer + 1, "unknown": None}[opener_kind]),
+            IsClipboardFormatAvailable=Mock(return_value=True),
+            GetClipboardData=Mock(return_value=1),
+            CloseClipboard=Mock(),
+        )
+        kernel = SimpleNamespace(
+            GlobalSize=Mock(return_value=ctypes.sizeof(raw)),
+            GlobalLock=Mock(return_value=ctypes.addressof(raw)),
+            GlobalUnlock=Mock(),
+        )
+        self.service._window_pid = lambda _window: self.pid
+        self.service._clipboard_owner_pid = lambda: self.pid
+        self.service._read_unicode_snapshot = WindowsCopyCapture._read_unicode_snapshot.__get__(self.service)
+        self.register("F8")
+        self.request(0x77)
+        self.service._send_pending_copy()
+        with patch.object(ctypes, "windll", SimpleNamespace(user32=user, kernel32=kernel)):
+            self.sequence += 1
+            self.service._wait_for_clipboard_change()
+            if first_open_busy:
+                if not advance_on_open:
+                    publish_update()
+                self.service._wait_for_clipboard_change(clipboard_notification=True)
+            self.service._wait_for_clipboard_change()
+            outcomes = self.delivered()
+        self.service._send_ctrl_c_to_active_window.assert_called_once()
+        return text, user, outcomes
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows ctypes boundary")
+    def test_first_snapshot_open_accepts_new_version_from_same_owner_window(self):
+        text, user, outcomes = self.capture_while_source_publishes(
+            advance_on_open=True, first_open_busy=False,
+        )
+        self.assertEqual(outcomes, [("F8", text, None)])
+        user.GetClipboardData.assert_called_once_with(13)
+        self.assertEqual(self.results[0][1]["clipboard_sequence_after"], 14)
+        self.assertTrue(self.results[0][1]["clipboard_sequence_advanced_at_open"])
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows ctypes boundary")
+    def test_publication_advances_during_owner_sample_before_first_open(self):
+        text, user, outcomes = self.capture_while_source_publishes(
+            advance_on_open=True, first_open_busy=False, advance_during_owner_sample=True,
+        )
+        self.assertEqual(outcomes, [("F8", text, None)])
+        user.GetClipboardData.assert_called_once_with(13)
+        evidence = self.results[0][1]
+        self.assertEqual(evidence["clipboard_sequence_observed"], 11)
+        self.assertEqual(evidence["clipboard_sequence_before_open"], 13)
+        self.assertEqual(evidence["clipboard_sequence_after"], 16)
+        self.assertTrue(evidence["clipboard_sequence_advanced_at_open"])
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows ctypes boundary")
+    def test_first_snapshot_rejects_owner_changed_during_sampling(self):
+        _, user, outcomes = self.capture_while_source_publishes(
+            first_open_busy=False, advance_during_owner_sample=True, change_sample_owner=True,
+        )
+        self.assertEqual(outcomes, [("F8", None, "clipboard_superseded")])
+        user.GetClipboardData.assert_not_called()
+        self.assertEqual(self.results[0][1]["clipboard_owner_sample"], "owner_window_changed")
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows ctypes boundary")
+    def test_first_snapshot_open_rejects_new_owner_and_next_f8_works(self):
+        _, user, outcomes = self.capture_while_source_publishes(
+            advance_on_open=True, first_open_busy=False, change_owner=True,
+        )
+        self.assertEqual(outcomes, [("F8", None, "clipboard_superseded")])
+        user.GetClipboardData.assert_not_called()
+        self.service._read_unicode_snapshot = lambda *args, **kwargs: self.snapshot
+        self.assertTrue(self.request(0x77))
+        self.service._send_pending_copy()
+        self.snapshot_update("Следующий фрагмент")
+        self.assertEqual(self.delivered()[-1], ("F8", "Следующий фрагмент", None))
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows ctypes boundary")
+    def test_first_snapshot_open_rejects_changed_source_focus(self):
+        _, user, outcomes = self.capture_while_source_publishes(
+            advance_on_open=True, first_open_busy=False, change_focus=True,
+        )
+        self.assertEqual(outcomes, [("F8", None, "clipboard_superseded")])
+        user.GetClipboardData.assert_not_called()
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows ctypes boundary")
+    def test_locked_source_can_finish_publishing_before_next_poll(self):
+        text, user, outcomes = self.capture_while_source_publishes()
+        self.assertEqual(outcomes, [("F8", text, None)])
+        user.GetClipboardData.assert_called_once_with(13)
+        self.assertEqual(self.results[0][1]["clipboard_sequence_after"], 14)
+        self.assertTrue(self.results[0][1]["clipboard_sequence_advanced_after_lock"])
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows ctypes boundary")
+    def test_locked_source_can_finish_publishing_between_poll_and_open(self):
+        text, user, outcomes = self.capture_while_source_publishes(advance_on_open=True)
+        self.assertEqual(outcomes, [("F8", text, None)])
+        user.GetClipboardData.assert_called_once_with(13)
+        self.assertEqual(self.results[0][1]["clipboard_sequence_after"], 14)
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows ctypes boundary")
+    def test_locked_source_recovery_rejects_replacement_even_from_same_process(self):
+        _, user, outcomes = self.capture_while_source_publishes(change_owner=True)
+        self.assertEqual(outcomes, [("F8", None, "clipboard_superseded")])
+        user.GetClipboardData.assert_not_called()
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows ctypes boundary")
+    def test_locked_source_recovery_rejects_a_focus_change(self):
+        _, user, outcomes = self.capture_while_source_publishes(change_focus=True)
+        self.assertEqual(outcomes, [("F8", None, "clipboard_superseded")])
+        user.GetClipboardData.assert_not_called()
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows ctypes boundary")
+    def test_busy_clipboard_can_finish_with_same_owner_when_opener_is_unknown(self):
+        text, user, outcomes = self.capture_while_source_publishes(opener_kind="unknown")
+        self.assertEqual(outcomes, [("F8", text, None)])
+        user.GetClipboardData.assert_called_once_with(13)
+        evidence = self.results[0][1]
+        self.assertEqual(evidence["clipboard_sequence_after"], 14)
+        self.assertEqual(evidence["read_attempts"], 2)
+        self.assertEqual(evidence["clipboard_open_busy_count"], 1)
+        self.assertEqual(evidence["clipboard_busy_opener"], "unknown")
+        self.assertFalse(evidence["clipboard_source_lock_confirmed"])
+        self.assertTrue(evidence["clipboard_sequence_advanced_after_busy"])
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows ctypes boundary")
+    def test_busy_clipboard_can_advance_during_next_open_with_unrelated_opener(self):
+        text, user, outcomes = self.capture_while_source_publishes(
+            opener_kind="other", advance_on_open=True,
+        )
+        self.assertEqual(outcomes, [("F8", text, None)])
+        user.GetClipboardData.assert_called_once_with(13)
+        self.assertTrue(self.results[0][1]["clipboard_sequence_advanced_after_busy"])
+        self.assertEqual(self.results[0][1]["clipboard_busy_opener"], "other_window")
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows ctypes boundary")
+    def test_busy_clipboard_rejects_replacement_even_from_same_process(self):
+        _, user, outcomes = self.capture_while_source_publishes(opener_kind="other", change_owner=True)
+        self.assertEqual(outcomes, [("F8", None, "clipboard_superseded")])
+        user.GetClipboardData.assert_not_called()
+        evidence = self.results[0][1]
+        self.assertEqual(evidence["clipboard_source_check"], "owner_window_changed")
+        self.assertEqual(evidence["clipboard_sequence_before"], 10)
+        self.assertEqual(evidence["clipboard_sequence_observed"], 11)
+        self.assertEqual(evidence["clipboard_sequence_latest"], 14)
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows ctypes boundary")
+    def test_busy_clipboard_rejects_source_focus_change(self):
+        _, user, outcomes = self.capture_while_source_publishes(opener_kind="unknown", change_focus=True)
+        self.assertEqual(outcomes, [("F8", None, "clipboard_superseded")])
+        user.GetClipboardData.assert_not_called()
+        self.assertEqual(self.results[0][1]["clipboard_source_check"], "source_focus_changed")
 
     def test_hotkey_starts_fresh_after_timeout_without_manual_copy(self):
         self.register("F8")
@@ -318,6 +522,89 @@ class CaptureRegressions(unittest.TestCase):
         self.assertEqual(self.delivered(), [("F8", None, "clipboard_dispatch_failed")])
         self.assertEqual(self.results[0][1]["capture_stage"], "dispatch")
         self.service._send_ctrl_c_to_active_window.assert_not_called()
+
+    def test_f8_waits_for_mouse_release_before_sending_one_copy(self):
+        self.register("F8")
+        self.service._copy_input_blocker = Mock(return_value="mouse")
+        self.assertTrue(self.request(0x77))
+        self.service._send_pending_copy()
+        self.service._send_ctrl_c_to_active_window.assert_not_called()
+        self.assertEqual(self.service._pending["context"]["capture_stage"], "waiting_input_release")
+        self.service._wait_for_clipboard_change()
+        self.assertEqual(self.service._wake_keyboard.call_count, 1)
+        self.service._copy_input_blocker.return_value = None
+        self.service._wait_for_clipboard_change()
+        self.assertEqual(self.service._wake_keyboard.call_count, 2)
+        self.service._send_pending_copy()
+        self.snapshot_update("Выделение завершено")
+        self.assertEqual(self.delivered(), [("F8", "Выделение завершено", None)])
+        self.service._send_ctrl_c_to_active_window.assert_called_once()
+
+    def test_custom_chord_copies_two_sources_to_the_same_tab(self):
+        self.register("Ctrl+F9")
+        for text in ("Пример из одного окна", "A different window 🧪\r\n"):
+            self.pid += 1
+            self.hwnd += 1
+            self.assertTrue(self.service._request_capture(0x78, {"CTRL"}, native=False))
+            self.service._copy_input_blocker.return_value = "modifier"
+            self.service._send_pending_copy()
+            self.service._copy_input_blocker.return_value = None
+            self.service._wait_for_clipboard_change()
+            self.service._send_pending_copy()
+            self.snapshot_update(text)
+        self.assertEqual(self.delivered(), [
+            ("Ctrl+F9", "Пример из одного окна", None),
+            ("Ctrl+F9", "A different window 🧪\r\n", None),
+        ])
+        self.assertEqual(self.service._send_ctrl_c_to_active_window.call_count, 2)
+
+    def repeat_f8_during_no_response(self):
+        self.register("F8")
+        self.service._last_input_tick = Mock(return_value=501)
+        self.request(0x77)
+        self.service._send_pending_copy()
+        keys = set(), set()
+        for down, tick in ((True, 501), (False, 502)):
+            self.assertTrue(self.service._dispatch_keyboard(
+                0x77, is_down=down, flags=0, pressed=keys[0], suppressed=keys[1], input_tick=tick,
+            ))
+
+    def test_repeated_f8_is_kept_until_no_response_deadline(self):
+        self.repeat_f8_during_no_response()
+        self.service._send_ctrl_c_to_active_window.assert_called_once()
+        self.service._pending["deadline"] = 0
+        self.service._wait_for_clipboard_change()
+        self.service._send_pending_copy()
+        self.snapshot_update("Текст после повторного F8")
+        self.assertEqual(self.delivered(), [("F8", "Текст после повторного F8", None)])
+        self.assertEqual(self.results[0][1]["capture_retry_of"], 1)
+        self.assertEqual(self.service._send_ctrl_c_to_active_window.call_count, 2)
+
+    def test_repeated_f8_is_cancelled_after_other_input(self):
+        self.repeat_f8_during_no_response()
+        self.service._last_input_tick.return_value = 900
+        self.service._pending["deadline"] = 0
+        self.service._wait_for_clipboard_change()
+        self.service._send_pending_copy()
+        self.assertEqual(self.delivered(), [("F8", None, "clipboard_timeout")])
+        self.assertEqual(self.results[0][1]["capture_retry_skipped"], "input_changed")
+        self.service._send_ctrl_c_to_active_window.assert_called_once()
+
+    def test_repeated_f8_is_cancelled_if_source_changes_after_promotion(self):
+        self.repeat_f8_during_no_response()
+        self.service._pending["deadline"] = 0
+        self.service._wait_for_clipboard_change()
+        self.hwnd += 1
+        self.service._send_pending_copy()
+        self.assertEqual(self.delivered(), [("F8", None, "source_window_changed")])
+        self.service._send_ctrl_c_to_active_window.assert_called_once()
+
+    def test_repeated_f8_needs_no_replay_after_original_response(self):
+        self.repeat_f8_during_no_response()
+        self.snapshot_update("Первый запрос выполнился")
+        self.service._send_pending_copy()
+        self.assertEqual(self.delivered(), [("F8", "Первый запрос выполнился", None)])
+        self.service._send_ctrl_c_to_active_window.assert_called_once()
 
     def test_update_after_timeout_while_idle_is_not_sent_to_another_tab(self):
         self.register("F8")

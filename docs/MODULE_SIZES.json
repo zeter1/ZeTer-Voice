@@ -12,14 +12,24 @@
       "lines": 493
     },
     {
+      "path": "tts_app/problem_logger_events.py",
+      "bytes": 22467,
+      "lines": 585
+    },
+    {
       "path": "tts_app/ui_messages_recovery.py",
       "bytes": 22335,
       "lines": 236
     },
     {
-      "path": "tts_app/problem_logger_events.py",
-      "bytes": 22247,
-      "lines": 578
+      "path": "tts_app/ui_messages_main.py",
+      "bytes": 22262,
+      "lines": 495
+    },
+    {
+      "path": "tts_app/runtime_storage.py",
+      "bytes": 21593,
+      "lines": 444
     },
     {
       "path": "tts_app/sapi_preview.py",
@@ -27,34 +37,24 @@
       "lines": 619
     },
     {
-      "path": "tts_app/ui_messages_main.py",
-      "bytes": 21561,
-      "lines": 481
-    },
-    {
       "path": "tts_app/ui_messages_conversion.py",
       "bytes": 21424,
       "lines": 362
     },
     {
-      "path": "tts_app/windows_hotkey_capture.py",
-      "bytes": 20895,
-      "lines": 458
-    },
-    {
       "path": "tts_app/app_workspace_init.py",
-      "bytes": 20517,
-      "lines": 477
-    },
-    {
-      "path": "tts_app/runtime_storage.py",
-      "bytes": 20480,
-      "lines": 427
+      "bytes": 20782,
+      "lines": 482
     },
     {
       "path": "tts_app/ui_messages_capture.py",
       "bytes": 20053,
       "lines": 292
+    },
+    {
+      "path": "tts_app/windows_hotkey_hook.py",
+      "bytes": 19919,
+      "lines": 434
     },
     {
       "path": "tts_app/ui_messages_playback.py",
@@ -67,14 +67,29 @@
       "lines": 299
     },
     {
+      "path": "tts_app/app_hotkeys.py",
+      "bytes": 18745,
+      "lines": 457
+    },
+    {
       "path": "tts_app/task_capture.py",
       "bytes": 18367,
       "lines": 424
     },
     {
+      "path": "tts_app/windows_hotkey_capture.py",
+      "bytes": 17781,
+      "lines": 369
+    },
+    {
       "path": "tts_app/task_preview_state.py",
       "bytes": 16952,
       "lines": 483
+    },
+    {
+      "path": "tts_app/ui_messages_settings.py",
+      "bytes": 16286,
+      "lines": 341
     },
     {
       "path": "tts_app/task_ui_build.py",
@@ -87,19 +102,19 @@
       "lines": 424
     },
     {
-      "path": "tts_app/app_hotkeys.py",
-      "bytes": 15436,
-      "lines": 405
-    },
-    {
       "path": "tts_app/app_workspace_save.py",
       "bytes": 15111,
       "lines": 325
     },
     {
+      "path": "tts_app/problem_logger_compact.py",
+      "bytes": 14816,
+      "lines": 367
+    },
+    {
       "path": "tts_app/problem_logger_session.py",
-      "bytes": 14735,
-      "lines": 386
+      "bytes": 14211,
+      "lines": 360
     },
     {
       "path": "tts_app/app_audio_settings.py",
@@ -107,14 +122,14 @@
       "lines": 421
     },
     {
-      "path": "tts_app/problem_logger_compact.py",
-      "bytes": 14033,
-      "lines": 345
-    },
-    {
       "path": "tts_app/task_conversion_controls.py",
       "bytes": 13904,
       "lines": 350
+    },
+    {
+      "path": "tts_app/mp3_settings_ui.py",
+      "bytes": 13624,
+      "lines": 276
     },
     {
       "path": "tts_app/runtime_audio.py",
@@ -122,14 +137,14 @@
       "lines": 383
     },
     {
-      "path": "tts_app/ui_messages_settings.py",
-      "bytes": 13539,
-      "lines": 299
-    },
-    {
       "path": "tts_app/problem_logger_insights.py",
       "bytes": 13451,
       "lines": 327
+    },
+    {
+      "path": "tts_app/hotkey_capture_guidance.py",
+      "bytes": 13143,
+      "lines": 114
     },
     {
       "path": "tts_app/engine_manager_ui.py",
@@ -142,9 +157,9 @@
       "lines": 417
     },
     {
-      "path": "tts_app/mp3_settings_ui.py",
-      "bytes": 12216,
-      "lines": 252
+      "path": "tts_app/widgets.py",
+      "bytes": 12446,
+      "lines": 313
     },
     {
       "path": "tts_app/app_recovery.py",
@@ -157,14 +172,14 @@
       "lines": 291
     },
     {
+      "path": "tts_app/workspace_theme.py",
+      "bytes": 11553,
+      "lines": 214
+    },
+    {
       "path": "tts_app/task_ui_sidebar.py",
       "bytes": 11398,
       "lines": 213
-    },
-    {
-      "path": "tts_app/runtime_core.py",
-      "bytes": 10780,
-      "lines": 346
     },
     {
       "path": "tts_app/task_preview_controls.py",
@@ -172,14 +187,9 @@
       "lines": 285
     },
     {
-      "path": "tts_app/workspace_theme.py",
-      "bytes": 10586,
-      "lines": 196
-    },
-    {
-      "path": "tts_app/widgets.py",
-      "bytes": 10493,
-      "lines": 272
+      "path": "tts_app/runtime_core.py",
+      "bytes": 10442,
+      "lines": 346
     },
     {
       "path": "tts_app/app_shutdown.py",
@@ -202,6 +212,11 @@
       "lines": 299
     },
     {
+      "path": "tts_app/conversion_notifications.py",
+      "bytes": 8573,
+      "lines": 191
+    },
+    {
       "path": "tts_app/voice_process.py",
       "bytes": 8563,
       "lines": 182
@@ -222,6 +237,11 @@
       "lines": 161
     },
     {
+      "path": "tts_app/ui_messages_capture_notifications.py",
+      "bytes": 8140,
+      "lines": 110
+    },
+    {
       "path": "tts_app/app_tabs.py",
       "bytes": 8053,
       "lines": 262
@@ -235,16 +255,6 @@
       "path": "tts_app/windows_hotkey_config.py",
       "bytes": 7427,
       "lines": 212
-    },
-    {
-      "path": "tts_app/conversion_notifications.py",
-      "bytes": 6517,
-      "lines": 143
-    },
-    {
-      "path": "tts_app/windows_hotkey_hook.py",
-      "bytes": 6415,
-      "lines": 156
     },
     {
       "path": "tts_app/engine_installation.py",
@@ -265,6 +275,11 @@
       "path": "tts_app/workspace_text_history.py",
       "bytes": 5447,
       "lines": 146
+    },
+    {
+      "path": "tts_app/capture_notification.py",
+      "bytes": 5413,
+      "lines": 111
     },
     {
       "path": "tts_app/runtime_recovery.py",
@@ -302,13 +317,18 @@
       "lines": 69
     },
     {
+      "path": "tts_app/problem_log_retention.py",
+      "bytes": 3531,
+      "lines": 96
+    },
+    {
       "path": "tts_app/runtime_shortcuts.py",
       "bytes": 2234,
       "lines": 75
     },
     {
       "path": "tts_app/app.py",
-      "bytes": 2141,
+      "bytes": 2072,
       "lines": 70
     },
     {
@@ -317,14 +337,14 @@
       "lines": 52
     },
     {
+      "path": "tts_app/i18n.py",
+      "bytes": 1455,
+      "lines": 53
+    },
+    {
       "path": "tts_app/localized_choices.py",
       "bytes": 1401,
       "lines": 38
-    },
-    {
-      "path": "tts_app/i18n.py",
-      "bytes": 1366,
-      "lines": 51
     },
     {
       "path": "tts_app/windows_hotkeys.py",

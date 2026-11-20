@@ -1,6 +1,48 @@
 """UI translations in English, Spanish, Polish, French and Portuguese order."""
 
 MESSAGES = {
+    "Логи проблем": (
+        "Problem logs",
+        "Registros de problemas",
+        "Dzienniki problemów",
+        "Journaux des problèmes",
+        "Logs de problemas",
+    ),
+    "Записывать логи проблем": (
+        "Record problem logs",
+        "Registrar problemas",
+        "Zapisuj dzienniki problemów",
+        "Enregistrer les journaux des problèmes",
+        "Registrar logs de problemas",
+    ),
+    "Изменения действуют после перезапуска. При запуске программа удаляет завершённые логи старше выбранного срока.": (
+        "Changes apply after restarting. At startup, the app removes completed logs older than the selected period.",
+        "Los cambios se aplican al reiniciar. Al iniciarse, la aplicación elimina los registros de sesiones finalizadas que superan el plazo elegido.",
+        "Zmiany zaczną obowiązywać po ponownym uruchomieniu. Podczas uruchamiania aplikacja usuwa dzienniki zakończonych sesji starsze niż wybrany okres.",
+        "Les changements prennent effet après redémarrage. Au démarrage, l’application supprime les journaux des sessions terminées dépassant la durée choisie.",
+        "As alterações entram em vigor após reiniciar. Na inicialização, o aplicativo exclui logs de sessões concluídas mais antigos que o período escolhido.",
+    ),
+    "Срок хранения логов, дней": (
+        "Log retention, days",
+        "Conservación de registros, días",
+        "Okres przechowywania dzienników, dni",
+        "Conservation des journaux, jours",
+        "Retenção de logs, em dias",
+    ),
+    "Срок хранения логов": (
+        "Log retention",
+        "Conservación de registros",
+        "Okres przechowywania dzienników",
+        "Conservation des journaux",
+        "Retenção de logs",
+    ),
+    "При следующем запуске завершённые логи старше {0} дн. будут удалены. Применить этот срок?": (
+        "At the next startup, completed logs older than {0} days will be removed. Apply this period?",
+        "En el próximo inicio se eliminarán los registros finalizados de hace más de {0} días. ¿Aplicar este plazo?",
+        "Przy następnym uruchomieniu dzienniki zakończonych sesji starsze niż {0} dni zostaną usunięte. Zastosować ten okres?",
+        "Au prochain démarrage, les journaux des sessions terminées de plus de {0} jours seront supprimés. Appliquer cette durée ?",
+        "Na próxima inicialização, os logs de sessões concluídas com mais de {0} dias serão excluídos. Aplicar esse período?",
+    ),
     "Голосовые движки": (
         "Voice engines",
         "Motores de voz",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .i18n import tr
+from .capture_notification import CaptureNotificationCard
 
 import ctypes
 from ctypes import wintypes
@@ -59,28 +60,13 @@ class ConversionNotifications:
         self.root = root
         self.thread_id = threading.get_ident()
         self.windows: list[tk.Toplevel] = []
+        self._capture_card: CaptureNotificationCard | None = None
+        self._capture_failure_count = 0
 
     def show(self, output: Path, note: str = "") -> None:
-        if threading.get_ident() != self.thread_id:
-            raise RuntimeError("Уведомления должны создаваться в потоке Tk.")
-        window = tk.Toplevel(self.root)
-        window.withdraw()
-        window.overrideredirect(True)
-        window.attributes("-topmost", True)
-        # Ignore WM close / Alt+F4: only the visible cross dismisses this item.
-        window.protocol("WM_DELETE_WINDOW", lambda: None)
-        window.title(tr("MP3 готов"))
-        self.windows.append(window)
-
-        body = ttk.Frame(window, padding=12, relief="solid", borderwidth=1)
-        body.pack(fill="both", expand=True)
-        header = ttk.Frame(body)
-        header.pack(fill="x")
-        ttk.Label(header, text=tr("Аудиофайл готов"), font=("Segoe UI", 11, "bold")).pack(side="left")
-        ttk.Button(header, text="×", width=3,
-                   command=lambda: self.dismiss(window)).pack(side="right")
-        left, top, right, bottom = notification_work_area(self.root)
-        width = min(400, right - left - 24)
+        area = self._work_area()
+        window, body = self._new_card(tr("MP3 готов"), tr("Аудиофайл готов"))
+        width = min(400, area[2] - area[0] - 24)
         # Keep controls reachable for long Windows paths; the action retains
         # the complete path, while the label shows the identifying suffix.
         name = output.name if len(output.name) <= 100 else output.name[:80] + "…" + output.suffix
@@ -93,14 +79,76 @@ class ConversionNotifications:
                           justify="left").pack(fill="x", pady=(6, 0))
         ttk.Button(body, text=tr("Показать файл"),
                    command=lambda: self.reveal(window, output)).pack(anchor="w", pady=(10, 0))
-        window.geometry(f"{width}x1")
-        window.update_idletasks()
-        self._reflow((left, top, right, bottom))
+        self._present(window, area, width)
+
+    def show_capture_failure(self, hotkey: str, message: str, *,
+                             source_process: str = "", insertion_uncertain: bool = False) -> None:
+        area = self._work_area()
+        self._capture_failure_count += 1
+        width = min(400, area[2] - area[0] - 24)
+        card = self._capture_card
+        if card is None:
+            window = self._new_window()
+            try:
+                card = CaptureNotificationCard(window, lambda: self.dismiss(window))
+                card.update(hotkey, message, width, self._capture_failure_count,
+                            source_process=source_process, insertion_uncertain=insertion_uncertain)
+            except (OSError, tk.TclError):
+                window.destroy()
+                raise
+            self._present(window, area, width)
+            self._capture_card = card
+        else:
+            card.update(hotkey, message, width, self._capture_failure_count,
+                        source_process=source_process, insertion_uncertain=insertion_uncertain)
+            card.window.update_idletasks()
+            self._reflow(area)
+
+    def _work_area(self) -> tuple[int, int, int, int]:
+        if threading.get_ident() != self.thread_id:
+            raise RuntimeError("Уведомления должны создаваться в потоке Tk.")
+        return notification_work_area(self.root)
+
+    def _new_window(self) -> tk.Toplevel:
+        window = tk.Toplevel(self.root)
+        window.withdraw()
+        window.overrideredirect(True)
+        window.attributes("-topmost", True)
+        # Ignore WM close / Alt+F4: only the visible cross dismisses this item.
+        window.protocol("WM_DELETE_WINDOW", lambda: None)
+        return window
+
+    def _new_card(self, title: str, heading: str) -> tuple[tk.Toplevel, ttk.Frame]:
+        window = self._new_window()
+        window.title(title)
+
+        body = ttk.Frame(window, padding=12, relief="solid", borderwidth=1)
+        body.pack(fill="both", expand=True)
+        header = ttk.Frame(body)
+        header.pack(fill="x")
+        ttk.Button(header, text="×", width=3,
+                   command=lambda: self.dismiss(window)).pack(side="right")
+        ttk.Label(header, text=heading, font=("Segoe UI", 11, "bold")).pack(side="left")
+        return window, body
+
+    def _present(self, window: tk.Toplevel, area: tuple[int, int, int, int], width: int) -> None:
+        self.windows.append(window)
+        try:
+            window.geometry(f"{width}x1")
+            window.update_idletasks()
+            self._reflow(area)
+        except (OSError, tk.TclError):
+            self.windows.remove(window)
+            window.destroy()
+            raise
 
     def dismiss(self, window: tk.Toplevel) -> None:
         if window not in self.windows:
             return
         self.windows.remove(window)
+        if self._capture_card is not None and window is self._capture_card.window:
+            self._capture_card = None
+            self._capture_failure_count = 0
         window.destroy()
         self._reflow()
 
