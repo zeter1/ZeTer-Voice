@@ -13,7 +13,7 @@ ZeTer Voice озвучивает текст на Windows и сохраняет �
 3. Вставьте во вкладку фразу «Это пробная запись ZeTer Voice». В панели **Голос и звук** выберите установленный голос Windows с подходящим языком и нажмите **Читать**, чтобы услышать фразу.
 4. После прослушивания нажмите **Создать MP3**, выберите папку и имя файла. Когда обработка завершится, откройте MP3 в выбранной папке.
 
-![Редактор ZeTer Voice с текстовыми вкладками, настройками голоса и кнопкой создания MP3](docs/screenshots/zeter-voice-editor-20261120.jpg)
+![Редактор ZeTer Voice с текстовыми вкладками, настройками голоса и кнопкой создания MP3](docs/screenshots/zeter-voice-editor-20261123.jpg)
 
 ## Как выбрать голос
 
@@ -42,9 +42,9 @@ Silero и Microsoft Edge можно установить в разделе **Н�
 
 ### Как выглядят настройки
 
-![Параметры MP3 и язык интерфейса](docs/screenshots/zeter-voice-settings-20261120.jpg)
+![Параметры MP3 и язык интерфейса](docs/screenshots/zeter-voice-settings-20261123.jpg)
 
-![Установка Silero и Microsoft Edge](docs/screenshots/zeter-voice-engines-20261120.jpg)
+![Установка Silero и Microsoft Edge](docs/screenshots/zeter-voice-engines-20261123.jpg)
 
 ## Запуск из исходников
 

@@ -13,7 +13,7 @@ ZeTer Voice reads text aloud on Windows and saves it as MP3. Paste text, open a 
 3. Paste “This is a ZeTer Voice test recording” into a tab. In **Voice and audio**, choose an installed Windows voice that matches the text language, then click **Read** to listen.
 4. After listening, click **Create MP3**, choose a folder and file name, and open the MP3 in that folder when the job finishes.
 
-![ZeTer Voice editor with text tabs, voice settings, and MP3 export](docs/screenshots/zeter-voice-editor-20261120.jpg)
+![ZeTer Voice editor with text tabs, voice settings, and MP3 export](docs/screenshots/zeter-voice-editor-20261123.jpg)
 
 ## Choose a voice
 
@@ -42,9 +42,9 @@ Settings, tabs, and recovery data are usually stored beside the copy of the app 
 
 ### Settings screenshots
 
-![MP3 and interface settings](docs/screenshots/zeter-voice-settings-20261120.jpg)
+![MP3 and interface settings](docs/screenshots/zeter-voice-settings-20261123.jpg)
 
-![Installing Silero and Microsoft Edge](docs/screenshots/zeter-voice-engines-20261120.jpg)
+![Installing Silero and Microsoft Edge](docs/screenshots/zeter-voice-engines-20261123.jpg)
 
 ## Run from source
 
