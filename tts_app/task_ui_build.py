@@ -201,7 +201,7 @@ class TaskUiBuildMixin(TaskUiSidebarMixin):
         self.sidebar_hotkey_hint = ttk.Frame(status)
         self.sidebar_hotkey_hint.grid(row=0, column=2, padx=(8, 10))
         ttk.Label(self.sidebar_hotkey_hint, text=tr("Захват:"), style="Note.TLabel").pack(side="left")
-        self.sidebar_button = ttk.Button(status, command=self._toggle_sidebar)
+        self.sidebar_button = ttk.Button(status, style="Surface.TButton", command=self._toggle_sidebar)
         self.sidebar_button.grid(row=0, column=3)
         self._build_sidebar()
         self.sidebar_hotkey = ttk.Label(

@@ -506,8 +506,8 @@
 | `_recheck_directory` | function | `tts_app/workspace_text_history.py` | 50–52 |
 | `archive_workspace_text` | function | `tts_app/workspace_text_history.py` | 55–102 |
 | `cleanup_workspace_text_history` | function | `tts_app/workspace_text_history.py` | 105–145 |
-| `_rounded_image` | function | `tts_app/workspace_theme.py` | 17–29 |
-| `_rename_element` | function | `tts_app/workspace_theme.py` | 32–41 |
-| `_switch_image` | function | `tts_app/workspace_theme.py` | 44–55 |
-| `_apply_workspace_elements` | function | `tts_app/workspace_theme.py` | 58–165 |
-| `apply_workspace_theme` | function | `tts_app/workspace_theme.py` | 168–213 |
+| `_rename_element` | function | `tts_app/workspace_theme.py` | 17–26 |
+| `_rounded_image` | function | `tts_app/workspace_theme.py` | 29–50 |
+| `_switch_image` | function | `tts_app/workspace_theme.py` | 53–58 |
+| `_apply_workspace_elements` | function | `tts_app/workspace_theme.py` | 61–179 |
+| `apply_workspace_theme` | function | `tts_app/workspace_theme.py` | 182–227 |

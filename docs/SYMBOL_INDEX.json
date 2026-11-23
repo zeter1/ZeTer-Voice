@@ -38,8 +38,8 @@
     },
     {
       "path": "tts_app/app_hotkeys.py",
-      "bytes": 18972,
-      "lines": 459
+      "bytes": 18973,
+      "lines": 460
     },
     {
       "path": "tts_app/app_recovery.py",
@@ -298,7 +298,7 @@
     },
     {
       "path": "tts_app/task_ui_build.py",
-      "bytes": 16031,
+      "bytes": 16056,
       "lines": 328
     },
     {
@@ -423,8 +423,8 @@
     },
     {
       "path": "tts_app/workspace_theme.py",
-      "bytes": 11553,
-      "lines": 214
+      "bytes": 12637,
+      "lines": 228
     }
   ],
   "symbols": [
@@ -4241,39 +4241,39 @@
       "end_line": 145
     },
     {
-      "symbol": "_rounded_image",
-      "kind": "function",
-      "path": "tts_app/workspace_theme.py",
-      "line": 17,
-      "end_line": 29
-    },
-    {
       "symbol": "_rename_element",
       "kind": "function",
       "path": "tts_app/workspace_theme.py",
-      "line": 32,
-      "end_line": 41
+      "line": 17,
+      "end_line": 26
+    },
+    {
+      "symbol": "_rounded_image",
+      "kind": "function",
+      "path": "tts_app/workspace_theme.py",
+      "line": 29,
+      "end_line": 50
     },
     {
       "symbol": "_switch_image",
       "kind": "function",
       "path": "tts_app/workspace_theme.py",
-      "line": 44,
-      "end_line": 55
+      "line": 53,
+      "end_line": 58
     },
     {
       "symbol": "_apply_workspace_elements",
       "kind": "function",
       "path": "tts_app/workspace_theme.py",
-      "line": 58,
-      "end_line": 165
+      "line": 61,
+      "end_line": 179
     },
     {
       "symbol": "apply_workspace_theme",
       "kind": "function",
       "path": "tts_app/workspace_theme.py",
-      "line": 168,
-      "end_line": 213
+      "line": 182,
+      "end_line": 227
     }
   ]
 }

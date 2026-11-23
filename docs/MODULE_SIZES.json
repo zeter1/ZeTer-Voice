@@ -68,8 +68,8 @@
     },
     {
       "path": "tts_app/app_hotkeys.py",
-      "bytes": 18972,
-      "lines": 459
+      "bytes": 18973,
+      "lines": 460
     },
     {
       "path": "tts_app/windows_hotkey_capture.py",
@@ -93,7 +93,7 @@
     },
     {
       "path": "tts_app/task_ui_build.py",
-      "bytes": 16031,
+      "bytes": 16056,
       "lines": 328
     },
     {
@@ -157,6 +157,11 @@
       "lines": 417
     },
     {
+      "path": "tts_app/workspace_theme.py",
+      "bytes": 12637,
+      "lines": 228
+    },
+    {
       "path": "tts_app/widgets.py",
       "bytes": 12446,
       "lines": 313
@@ -170,11 +175,6 @@
       "path": "tts_app/ui_stall_diagnostics.py",
       "bytes": 11899,
       "lines": 291
-    },
-    {
-      "path": "tts_app/workspace_theme.py",
-      "bytes": 11553,
-      "lines": 214
     },
     {
       "path": "tts_app/task_ui_sidebar.py",

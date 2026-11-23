@@ -456,3 +456,4 @@ class AppHotkeysMixin:
                 "global_copy_notification_failed", capture_id=evidence.get("capture_id"),
                 reason=reason, exception_type=type(exc).__name__,
             )
+

@@ -14,21 +14,6 @@ FOCUS = "#7581d9"
 DISABLED = "#6f7b8e"
 
 
-def _rounded_image(root, fill, outline, *, radius=8, gap=0, tile=3):
-    """Create a small stretchable border. Its transparent corners stay fixed."""
-    size = radius * 2 + tile
-    image = tk.PhotoImage(master=root, width=size + gap, height=size)
-    for y in range(size):
-        vertical = max(radius - y, y - (size - radius - 1), 0)
-        inset = radius - int(math.sqrt(radius * radius - vertical * vertical))
-        image.put(outline, to=(inset, y, size - inset, y + 1))
-        if 0 < y < size - 1:
-            inner = max(inset + 1, 1)
-            if inner * 2 < size:
-                image.put(fill, to=(inner, y, size - inner, y + 1))
-    return image
-
-
 def _rename_element(layout, source, target):
     result = []
     for element, options in layout:
@@ -41,43 +26,63 @@ def _rename_element(layout, source, target):
     return result
 
 
+def _rounded_image(root, fill, outline, *, radius=8, gap=0, tile=3, background=WHITE, width=None):
+    """Blend fixed corners into the surface beneath the widget."""
+    height = radius * 2 + tile
+    width = width or height
+    image = tk.PhotoImage(master=root, width=width + gap, height=height)
+    image.put(background, to=(0, 0, width + gap, height))
+    image.put(outline, to=(0, 0, width, height))
+    image.put(fill, to=(1, 1, width - 1, height - 1))
+    colors = [bytes.fromhex(color[1:]) for color in (background, outline, fill)]
+    for y in range(radius):
+        row = []
+        for x in range(radius):
+            depth = radius + 0.5 - math.hypot(radius - x - 0.5, radius - y - 0.5)
+            outer = min(1, max(0, depth))
+            inner = max(0, min(1, depth - 1))
+            rgb = bytes(round(bg * (1 - outer) + edge * (outer - inner) + face * inner)
+                        for bg, edge, face in zip(*colors))
+            row.append("#" + rgb.hex())
+        for line in (y, height - 1 - y):
+            image.put("{" + " ".join(row) + "}", to=(0, line))
+            image.put("{" + " ".join(reversed(row)) + "}", to=(width - radius, line))
+    return image
+
+
 def _switch_image(root, enabled: bool) -> tk.PhotoImage:
-    image = tk.PhotoImage(master=root, width=43, height=18)
     track = ACCENT if enabled else "#8995ab"
-    for y in range(18):
-        dy = y - 8.5
-        inset = 9 - int(math.sqrt(81 - dy * dy))
-        image.put(track, to=(inset, y, 36 - inset, y + 1))
-    center = 26 if enabled else 9
-    for y in range(3, 15):
-        half = int(math.sqrt(36 - (y - 8.5) ** 2))
-        image.put(WHITE, to=(center - half, y, center + half + 1, y + 1))
+    image = _rounded_image(root, track, track, radius=9, tile=0, width=36, gap=7)
+    thumb = _rounded_image(root, WHITE, WHITE, radius=6, tile=0, background=track)
+    image.tk.call(image, "copy", thumb, "-to", 20 if enabled else 3, 3)
     return image
 
 
 def _apply_workspace_elements(root, style):
     images = []
 
-    def element(name, fill, edge, *, states=(), gap=0, radius=8, tile=3):
+    def element(name, fill, edge, *, states=(), gap=0, radius=8, tile=3, background=WHITE):
         border = (radius, radius, radius + gap, radius)
-        base = _rounded_image(root, fill, edge, radius=radius, gap=gap, tile=tile)
+        base = _rounded_image(root, fill, edge, radius=radius, gap=gap, tile=tile, background=background)
         variants = []
         for state, color, border_color in states:
-            variant = _rounded_image(root, color, border_color, radius=radius, gap=gap, tile=tile)
+            variant = _rounded_image(root, color, border_color, radius=radius, gap=gap, tile=tile, background=background)
             variants.append((*state.split(), variant))
             images.append(variant)
         images.append(base)
         size_override = {"width": 1, "height": 1} if tile > 3 else {}
         style.element_create(name, "image", base, *variants, border=border, padding=(1, 1), sticky="nsew", **size_override)
 
-    element("Voice.Card", WHITE, BORDER, radius=10, tile=96)
+    element("Voice.Card", WHITE, BORDER, radius=10, tile=96, background=SURFACE)
     style.layout("Card.TFrame", [("Voice.Card", {"sticky": "nsew"})])
     # Full-width contact rows use these button borders. A larger center tile
     # avoids thousands of tiny Win32 blits without changing the corner radius.
-    element("Voice.Button.border", WHITE, BORDER, tile=96, states=(
+    button_states = (
         ("disabled", SURFACE, BORDER), ("focus", WHITE, FOCUS), ("pressed", ACCENT_WASH, FOCUS),
         ("active", "#f4f5ff", "#bbc2ee"),
-    ))
+    )
+    element("Voice.Button.border", WHITE, BORDER, tile=96, states=button_states)
+    element("Voice.SurfaceButton.border", WHITE, BORDER, tile=96, background=SURFACE, states=button_states)
     element("Voice.Primary.border", ACCENT_WASH, "#b6beff", states=(
         ("disabled", SURFACE, BORDER), ("focus", ACCENT_WASH, FOCUS),
         ("pressed", "#dce1ff", FOCUS), ("active", "#e4e8ff", "#a4aff3"),
@@ -88,7 +93,8 @@ def _apply_workspace_elements(root, style):
     ))
     style.layout("TButton", _rename_element(style.layout("TButton"), "Button.border", "Voice.Button.border"))
     style.layout("Primary.TButton", _rename_element(style.layout("TButton"), "Voice.Button.border", "Voice.Primary.border"))
-    element("Voice.NewTab.border", ACCENT, ACCENT, radius=10, states=(
+    style.layout("Surface.TButton", _rename_element(style.layout("TButton"), "Voice.Button.border", "Voice.SurfaceButton.border"))
+    element("Voice.NewTab.border", ACCENT, ACCENT, background=SURFACE, radius=10, states=(
         ("disabled", DISABLED, DISABLED), ("pressed", "#202c8c", "#202c8c"),
         ("active focus", "#2b38aa", "#8694f2"), ("focus", ACCENT, "#8694f2"),
         ("active", "#2b38aa", "#2b38aa"),
@@ -96,10 +102,8 @@ def _apply_workspace_elements(root, style):
     icon_size = max(13, round(root.winfo_fpixels("10p"))) | 1
     plus = tk.PhotoImage(master=root, width=icon_size, height=icon_size)
     center = icon_size // 2
-    plus.put(WHITE, to=(0, center, icon_size, center + 1))
-    plus.put(WHITE, to=(1, center - 1, icon_size - 1, center + 2))
-    plus.put(WHITE, to=(center, 0, center + 1, icon_size))
-    plus.put(WHITE, to=(center - 1, 1, center + 2, icon_size - 1))
+    plus.put(WHITE, to=(0, center - 1, icon_size, center + 2))
+    plus.put(WHITE, to=(center - 1, 0, center + 2, icon_size))
     images.append(plus)
     style.element_create("Voice.NewTab.plus", "image", plus, sticky="")
     style.layout("NewTab.TButton", _rename_element(
@@ -113,9 +117,19 @@ def _apply_workspace_elements(root, style):
         ]}),
     ])
     style.layout("TMenubutton", _rename_element(style.layout("TMenubutton"), "Menubutton.border", "Voice.Button.border"))
-    style.layout("TCombobox", _rename_element(style.layout("TCombobox"), "Combobox.field", "Voice.Button.border"))
-    style.layout("TSpinbox", _rename_element(style.layout("TSpinbox"), "Spinbox.field", "Voice.Button.border"))
-    element("Voice.Notebook.tab", WHITE, BORDER, gap=7, states=(
+    element("Voice.Field", WHITE, BORDER, radius=7, states=button_states[:2])
+    arrow = tk.PhotoImage(master=root, width=19, height=7)
+    for y in range(4):
+        arrow.put(INK, to=(6 + y, y + 1, 13 - y, y + 2))
+    images.append(arrow)
+    style.element_create("Voice.Combobox.downarrow", "image", arrow, sticky="")
+    arrow_node, (_, field) = style.layout("TCombobox")
+    style.layout("TCombobox", [("Voice.Field", {"sticky": "nsew", "children": [
+        ("Voice.Combobox.downarrow", {"side": arrow_node[1]["side"], "sticky": "e"}),
+        *field["children"],
+    ]})])
+    style.layout("TSpinbox", _rename_element(style.layout("TSpinbox"), "Spinbox.field", "Voice.Field"))
+    element("Voice.Notebook.tab", WHITE, BORDER, background=SURFACE, gap=7, states=(
         ("selected focus", "#dfe4ff", "#b6beff"),
         ("selected", ACCENT_WASH, "#b6beff"), ("active", "#f4f5ff", "#bbc2ee"),
     ))
