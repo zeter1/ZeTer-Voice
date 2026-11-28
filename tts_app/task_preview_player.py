@@ -212,6 +212,17 @@ class TaskPreviewPlayerMixin:
                     )
 
                 def report_segment_done(info: dict) -> None:
+                    # The first segment also covers the snapshot's leading
+                    # whitespace (for example the "\n" separator inserted before
+                    # an appended tail). Without it, deletion after reading
+                    # leaves that whitespace in the tab forever.
+                    segment_end = int(info.get("end") or 0)
+                    if int(info.get("index") or 0) <= 1:
+                        raw_segment = raw_text[:segment_end]
+                    else:
+                        raw_segment = raw_text[
+                            int(info.get("start") or 0):segment_end
+                        ]
                     self.app.events.put(
                         (
                             self.task_id,
@@ -220,7 +231,7 @@ class TaskPreviewPlayerMixin:
                                 **info,
                                 "base_index": ui_base_index,
                                 "preview_run_id": preview_run_id,
-                                "raw_segment": raw_text[info["start"]:info["end"]],
+                                "raw_segment": raw_segment,
                             },
                         )
                     )
@@ -377,6 +388,7 @@ class TaskPreviewPlayerMixin:
                 info.get("base_index")
                 or self.current_preview_base_index
             )
+            segment_index = int(info.get("index") or 0)
             original_start = int(info.get("start") or 0)
             original_end = int(info.get("end") or original_start)
 
@@ -384,6 +396,11 @@ class TaskPreviewPlayerMixin:
                 0,
                 original_start - self.preview_deleted_chars,
             )
+            if segment_index <= 1:
+                # Include the leading whitespace of the snapshot in the first
+                # pending deletion range. The worker sends the matching
+                # raw_segment, so after the whole read the tab is left empty.
+                adjusted_start = 0
             adjusted_end = max(
                 adjusted_start,
                 original_end - self.preview_deleted_chars,

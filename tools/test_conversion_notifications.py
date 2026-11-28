@@ -48,7 +48,8 @@ class CaptureFailureTests(unittest.TestCase):
         self.app._on_tab_copy_hotkey("tab", {
             "capture_id": 7, "capture_rejected": "clipboard_timeout",
             "capture_stage": "clipboard_open_busy", "captured_text": "PRIVATE_FIXTURE_TEXT",
-            "source_process": "test-editor.exe",
+            "source_process": "test-editor.exe", "source_ping": "ok",
+            "source_foreground": True, "source_focus_class": "Edit",
         })
         self.app.completion_notifications.show_capture_failure.assert_called_once()
         hotkey, message = self.app.completion_notifications.show_capture_failure.call_args.args[:2]
@@ -71,9 +72,49 @@ class CaptureFailureTests(unittest.TestCase):
             self.assertEqual(record["capture_id"], 7)
             self.assertEqual(record["capture_stage"], "clipboard_open_busy")
             self.assertEqual(record["reason_detail"], message)
+            self.assertEqual(record["source_ping"], "ok")
+            self.assertIs(record["source_foreground"], True)
+            self.assertEqual(record["source_focus_class"], "Edit")
             self.assertIn("clipboard_open_busy", record["suggested_check"])
             self.assertIn("менеджер буфера", record["suggested_fix"])
             self.assertEqual(record["owner_module"], "tts_app/windows_hotkey_capture.py")
+
+    def test_timeout_reports_unresponsive_source_window(self):
+        self.app.logger = Mock()
+        self.app._on_tab_copy_hotkey("tab", {
+            "capture_id": 9, "capture_rejected": "clipboard_timeout",
+            "capture_stage": "waiting_clipboard", "source_ping": "timeout",
+            "source_foreground": True, "source_focus_class": "Qt5152QWindowIcon",
+        })
+        record = self.app.logger.event.call_args.kwargs
+        self.assertIn("не отвечает", record["reason_detail"])
+        self.assertIn("source_ping", record["suggested_check"])
+        self.assertEqual(record["source_focus_class"], "Qt5152QWindowIcon")
+        message = self.app.completion_notifications.show_capture_failure.call_args.args[1]
+        self.assertEqual(message, record["reason_detail"])
+        self.task.append_external_selected_text.assert_not_called()
+
+    def test_timeout_reports_answered_source_without_selection(self):
+        self.app.logger = Mock()
+        self.app._on_tab_copy_hotkey("tab", {
+            "capture_id": 10, "capture_rejected": "clipboard_timeout",
+            "capture_stage": "waiting_clipboard", "source_ping": "ok",
+            "source_foreground": True, "source_focus_class": "",
+        })
+        record = self.app.logger.event.call_args.kwargs
+        self.assertIn("не был выделен", record["reason_detail"])
+        self.assertIn("source_foreground", record["suggested_check"])
+        self.assertEqual(record["capture_id"], 10)
+
+    def test_timeout_reports_source_that_lost_the_foreground(self):
+        self.app.logger = Mock()
+        self.app._on_tab_copy_hotkey("tab", {
+            "capture_id": 11, "capture_rejected": "clipboard_timeout",
+            "capture_stage": "waiting_clipboard", "source_ping": "ok",
+            "source_foreground": False,
+        })
+        record = self.app.logger.event.call_args.kwargs
+        self.assertIn("перестало быть активным", record["reason_detail"])
 
     def test_fix_depends_on_the_observed_stage(self):
         self.app.logger = Mock()

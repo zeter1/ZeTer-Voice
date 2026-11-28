@@ -24,6 +24,7 @@ CAPTURE_LOG_FIELDS = (
     "clipboard_open_busy_count", "clipboard_busy_opener", "clipboard_source_check",
     "clipboard_sequence_before_open", "clipboard_owner_sample",
     "clipboard_open_at_dispatch", "clipboard_open_at_retry", "clipboard_open_at_timeout",
+    "source_ping", "source_foreground", "source_focus_class",
     "blocked_by_capture_id", "blocked_by_capture_stage",
     "copy_waited_for_input", "capture_mouse_guard", "capture_attempt", "capture_retry_of", "capture_retry_skipped",
     "capture_repeat_id", "capture_retry_mode", "capture_retry_dispatched", "capture_retry_ms",
@@ -422,10 +423,27 @@ class AppHotkeysMixin:
         elif stage == "append_text":
             owner = "tts_app/task_capture.py"
         reason_detail = detail
+        source_evidence = False
         if reason == "clipboard_timeout" and stage == "waiting_input_release":
             reason_detail = "Кнопку мыши или клавишу-модификатор удерживали до конца ожидания. Команда Ctrl+C не отправлялась."
             check = "Проверь copy_waited_for_input. Повтори с тем же выделением, отпустив кнопку мыши и клавиши сочетания."
-        if reason == "clipboard_timeout" and evidence.get("capture_retry_skipped"):
+        elif reason == "clipboard_timeout" and stage == "waiting_clipboard" and evidence.get("source_ping") == "timeout":
+            source_evidence = True
+            detail = "Окно источника не отвечает на сообщения Windows. Дождитесь ответа приложения и повторите захват."
+            reason_detail = detail
+            check = "Сверь source_ping и source_foreground: окно не ответило даже на WM_NULL. Сравни с соседними захватами и ручным Ctrl+C."
+        elif reason == "clipboard_timeout" and stage == "waiting_clipboard" and evidence.get("source_foreground") is False:
+            source_evidence = True
+            detail = "Окно источника перестало быть активным до ответа. Вернитесь в него и повторите захват."
+            reason_detail = detail
+            check = "Сверь source_foreground и source_focus_class: фокус ушёл до публикации буфера."
+        elif reason == "clipboard_timeout" and stage == "waiting_clipboard" and evidence.get("source_ping") == "ok":
+            source_evidence = True
+            detail = "Источник ответил, но буфер не изменился: вероятно, текст не был выделен. Выделите фрагмент заново и повторите."
+            reason_detail = detail
+            check = "Сверь source_ping, source_foreground и source_focus_class: окно ответило, но команду копирования не выполнило."
+        if (reason == "clipboard_timeout" and evidence.get("capture_retry_skipped")
+                and not source_evidence):
             check = "Проверь capture_retry_skipped и состояние исходного окна, ввода и буфера перед повторной командой."
         if guidance == "clipboard_version_changed":
             source_check = evidence.get("clipboard_source_check")

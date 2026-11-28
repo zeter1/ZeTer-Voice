@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import sys
 import threading
+import time
 import tkinter as tk
 import unittest
 from pathlib import Path
@@ -22,6 +23,7 @@ from tts_app.runtime_shortcuts import handle_text_ctrl_shortcut
 from tts_app import task_text_performance
 from tts_app.task_text_performance import TaskTextPerformanceMixin
 from tts_app.task_ui_status import TaskUiStatusMixin
+from tts_app.text_processing import build_preview_segments
 
 
 class CaptureTask(
@@ -75,6 +77,60 @@ class CaptureTests(unittest.TestCase):
         self.root = tk.Tk()
         self.root.withdraw()
         self.addCleanup(self.root.destroy)
+
+    def _preview_delete_state(self, task, text):
+        task.preview_base_mark = "preview_start"
+        task.preview_pending_delete_start_mark = "preview_delete_start"
+        task.preview_pending_delete_end_mark = "preview_delete_end"
+        task.preview_deleted_chars = 0
+        task.preview_pending_delete_active = False
+        task.preview_pending_delete_text = ""
+        task.preview_delete_conflicted = False
+        task.current_preview_run_id = "preview-1"
+        task.current_preview_base_index = task.preview_base_mark
+        task.current_preview_base_text_offset = 0
+        task.current_preview_follow_end = False
+        task.current_preview_range_end = len(text)
+        task.current_preview_snapshot_end = len(text)
+        task._delete_log_chars = 0
+        task._delete_log_segments = 0
+        task._delete_log_last_flush_perf = time.perf_counter()
+        task.text_box.mark_set(task.preview_base_mark, "1.0")
+        task.text_box.mark_gravity(task.preview_base_mark, "left")
+        task.text_box.mark_set(
+            task.preview_snapshot_end_mark,
+            f"1.0+{len(text)}c",
+        )
+        task.text_box.mark_gravity(
+            task.preview_snapshot_end_mark,
+            "left",
+        )
+
+    def _feed_preview_segments(self, task, raw_text, base_index, *, limit=0, skip=0):
+        segments = build_preview_segments(raw_text)
+        for index, segment in enumerate(segments, start=1):
+            if index <= skip or (limit and index > limit):
+                continue
+            end = int(segment["end"])
+            if index == 1:
+                raw_segment = raw_text[:end]
+            else:
+                raw_segment = raw_text[int(segment["start"]):end]
+            TaskPreviewPlayerMixin.handle_preview_segment_done(
+                task,
+                {
+                    "preview_run_id": task.current_preview_run_id,
+                    "playback_verified": True,
+                    "base_index": base_index,
+                    "start": int(segment["start"]),
+                    "end": end,
+                    "index": index,
+                    "total": len(segments),
+                    "text": str(segment["text"]),
+                    "raw_segment": raw_segment,
+                },
+            )
+
 
     def test_large_capture_burst_needs_no_whole_widget_read_until_status(self):
         original = ("Первый абзац. Text 🧪\n" * 60_000) + "last line 🙂"
@@ -169,6 +225,134 @@ class CaptureTests(unittest.TestCase):
         tail, _ = task._unread_appended_tail()
         self.assertEqual(tail, "\n🧪\n…\nNow readable.")
         self.assertEqual(task.full_reads, 1)
+
+    def test_appended_hotkey_tail_is_deleted_completely(self):
+        original = "Начало чтения. Второе предложение!"
+        task = CaptureTask(self.root, original)
+        task.delete_read_text_var.set(True)
+        task.auto_read_hotkey_var.set(True)
+        task.preview_thread = SimpleNamespace(is_alive=lambda: True)
+        self._preview_delete_state(task, original)
+        task.current_preview_follow_end = True
+
+        self._feed_preview_segments(
+            task, original, task.preview_base_mark, limit=1,
+        )
+        self.assertTrue(
+            task.append_external_selected_text("Добавленный хвост. Ещё фраза!")
+        )
+        self._feed_preview_segments(
+            task, original, task.preview_base_mark, skip=1,
+        )
+        task.finalize_delete_read_text()
+
+        self.assertTrue(task.continue_appended_tail_if_needed())
+        call = task._start_preview_worker.call_args.kwargs
+        self.assertEqual(call["raw_text"], "\nДобавленный хвост. Ещё фраза!")
+        self.assertEqual(call["source_mode"], "appended_tail")
+        self.assertTrue(call["preserve_existing_bookmark"])
+
+        # The tail is read by a new preview run: simulate its worker state.
+        tail_text = call["raw_text"]
+        tail_start = call["preview_base_index"]
+        task.current_preview_run_id = "preview-tail"
+        task.text_box.mark_set(task.preview_base_mark, tail_start)
+        task.text_box.mark_gravity(task.preview_base_mark, "left")
+        task.text_box.mark_set(
+            task.preview_snapshot_end_mark,
+            f"{tail_start}+{len(tail_text)}c",
+        )
+        task.text_box.mark_gravity(task.preview_snapshot_end_mark, "left")
+        task.current_preview_base_index = task.preview_base_mark
+        task.current_preview_base_text_offset = (
+            task._text_offset_from_index(tail_start)
+        )
+        task.preview_deleted_chars = 0
+        task.preview_pending_delete_active = False
+        task.preview_delete_conflicted = False
+        self._feed_preview_segments(
+            task, tail_text, task.preview_base_mark,
+        )
+        task.finalize_delete_read_text()
+
+        # Nothing may remain: the leading "\n" separator was read too.
+        self.assertEqual(task.text_box.get("1.0", "end-1c"), "")
+
+    def test_delete_from_cursor_empties_snapshot_but_keeps_text_before(self):
+        original = "Сохранённый текст. \nЧитаемое предложение. Ещё одно!"
+        task = CaptureTask(self.root, original)
+        task.delete_read_text_var.set(True)
+        cursor_offset = original.index("\n")
+        cursor_index = f"1.{cursor_offset + 1}"
+        raw_text = task.text_box.get(cursor_index, "end-1c")
+        self._preview_delete_state(task, raw_text)
+        task.text_box.mark_set(task.preview_base_mark, cursor_index)
+        task.text_box.mark_gravity(task.preview_base_mark, "left")
+        task.text_box.mark_set(
+            task.preview_snapshot_end_mark,
+            f"{cursor_index}+{len(raw_text)}c",
+        )
+        task.text_box.mark_gravity(task.preview_snapshot_end_mark, "left")
+        task.current_preview_base_text_offset = cursor_offset
+
+        self._feed_preview_segments(task, raw_text, task.preview_base_mark)
+        task.finalize_delete_read_text()
+
+        self.assertEqual(
+            task.text_box.get("1.0", "end-1c"),
+            original[:cursor_offset],
+        )
+
+    def test_appended_tail_worker_follows_end_after_deletion(self):
+        original = "Начало. Второе!"
+        task = CaptureTask(self.root, original)
+        task.delete_read_text_var.set(True)
+        task.auto_read_hotkey_var.set(True)
+        task.preview_thread = SimpleNamespace(is_alive=lambda: True)
+        self._preview_delete_state(task, original)
+        task.current_preview_follow_end = True
+        self._feed_preview_segments(
+            task, original, task.preview_base_mark, limit=1,
+        )
+        self.assertTrue(
+            task.append_external_selected_text("Хвост. Ещё фраза!")
+        )
+        self._feed_preview_segments(
+            task, original, task.preview_base_mark, skip=1,
+        )
+        task.finalize_delete_read_text()
+        self.assertEqual(
+            task.text_box.get("1.0", "end-1c"),
+            "\nХвост. Ещё фраза!",
+        )
+
+        # The original preview finished; the real worker must take the tail.
+        task.preview_thread = SimpleNamespace(is_alive=lambda: False)
+        del task._start_preview_worker
+        task.voice_var = tk.StringVar(self.root, "Synthetic")
+        task.audio_output_var = tk.StringVar(self.root)
+        task.rate_var = task.pitch_var = tk.IntVar(self.root, 0)
+        task.volume_var = tk.IntVar(self.root, 100)
+        task.app.stop_other_previews = Mock()
+        task.preview_stop_event = threading.Event()
+        task.preview_pause_event = threading.Event()
+        task._set_playback_controls = Mock()
+        task.preview_base_mark = "preview_start"
+        worker = Mock()
+        with patch(
+            "tts_app.task_preview_player.threading.Thread",
+            return_value=worker,
+        ):
+            self.assertTrue(task.continue_appended_tail_if_needed())
+        worker.start.assert_called_once()
+        self.assertTrue(task.current_preview_follow_end)
+        self.assertEqual(
+            task.text_box.get(
+                task.preview_base_mark,
+                task.preview_snapshot_end_mark,
+            ),
+            "\nХвост. Ещё фраза!",
+        )
 
     def test_saved_preview_bookmark_remains_valid_after_append(self):
         original = "Абзац 🙂. Чтение на паузе."

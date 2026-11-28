@@ -157,7 +157,7 @@ class WindowsHotkeyHookMixin:
                 context["binding_generation"] = monitor._binding_generation
                 self._capture_id += 1
                 context.update(
-                    capture_id=self._capture_id, capture_protocol=7, capture_stage="trigger",
+                    capture_id=self._capture_id, capture_protocol=8, capture_stage="trigger",
                     copy_kind="native_ctrl_c" if native else "injected_ctrl_c",
                     capture_mouse_guard=bool(self._mouse_hook_id),
                 )

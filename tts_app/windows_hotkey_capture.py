@@ -14,6 +14,10 @@ from .runtime import (
 from .windows_hotkey_hook import WindowsHotkeyHookMixin
 
 
+_SOURCE_PING_TIMEOUT_MS = 80
+_SOURCE_PING_TIMEOUT_SEC = 0.05
+
+
 class WindowsCopyCapture(WindowsHotkeyHookMixin):
     """One keyboard hook, clipboard listener and delivery queue for the Tk root."""
 
@@ -123,6 +127,7 @@ class WindowsCopyCapture(WindowsHotkeyHookMixin):
             context["clipboard_sequence_changed"] = sequence != context["clipboard_sequence_before"]
         if pending["monitor"] is not None:
             context["clipboard_open_at_timeout"] = self._clipboard_open_by(context["source_pid"])
+            context.update(self._source_state(context))
 
     @staticmethod
     def _clipboard_open_window():
@@ -135,6 +140,56 @@ class WindowsCopyCapture(WindowsHotkeyHookMixin):
         if not opener:
             return "no_window_reported"
         return "source" if self._window_pid(opener) == source_pid else "other_window"
+
+    @staticmethod
+    def _window_class(hwnd):
+        if not hwnd:
+            return ""
+        user32 = ctypes.windll.user32
+        user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+        user32.GetClassNameW.restype = ctypes.c_int
+        buffer = ctypes.create_unicode_buffer(128)
+        length = user32.GetClassNameW(hwnd, buffer, len(buffer))
+        return buffer.value[:64] if length > 0 else ""
+
+    @staticmethod
+    def _source_ping(hwnd):
+        # WM_NULL asks whether the source UI thread still handles messages.
+        # A healthy window answers at once; a busy one uses the whole bound.
+        if not hwnd:
+            return "unavailable"
+        user32 = ctypes.windll.user32
+        user32.SendMessageTimeoutW.argtypes = [
+            wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM,
+            wintypes.UINT, wintypes.UINT, ctypes.POINTER(ctypes.c_size_t),
+        ]
+        user32.SendMessageTimeoutW.restype = ctypes.c_ssize_t
+        result = ctypes.c_size_t(0)
+        started = time.perf_counter()
+        try:
+            answered = user32.SendMessageTimeoutW(
+                hwnd, 0x0000, 0, 0, 0x0001, _SOURCE_PING_TIMEOUT_MS, ctypes.byref(result),
+            )
+        except (OSError, ctypes.ArgumentError):
+            return "unavailable"
+        if answered:
+            return "ok"
+        return "timeout" if time.perf_counter() - started >= _SOURCE_PING_TIMEOUT_SEC else "unavailable"
+
+    def _source_state(self, context):
+        """Describe the source window when it stayed silent after the command."""
+        hwnd = context.get("source_hwnd")
+        state = {
+            "source_ping": self._source_ping(hwnd),
+            "source_focus_class": self._window_class(context.get("source_focus") or hwnd),
+        }
+        try:
+            state["source_foreground"] = self._same_source_window(
+                context, self._foreground_capture_context(),
+            )
+        except (OSError, ctypes.ArgumentError, ValueError):
+            state["source_foreground"] = None
+        return state
 
     def _wait_for_clipboard_change(self, *, clipboard_notification=False):
         # Runs only on the clipboard thread. Never block the keyboard hook or Tk

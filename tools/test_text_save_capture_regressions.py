@@ -17,6 +17,7 @@ from tts_app.runtime_storage import atomic_write_text
 from tts_app.sapi_core import read_text_file
 from tts_app.task_preview_delete import TaskPreviewDeleteMixin
 from tts_app.task_preview_player import TaskPreviewPlayerMixin
+from tts_app.runtime import CLIPBOARD_COPY_TIMEOUT_SEC
 from tts_app.text_processing import build_preview_segments
 from tts_app.windows_hotkey_capture import WindowsCopyCapture
 from tts_app.windows_hotkeys import GlobalCopyHotkeyMonitor
@@ -477,14 +478,89 @@ class CaptureRegressions(unittest.TestCase):
             self.request(0x77)
             clock.return_value = now + 0.5
             self.service._send_pending_copy()
-            clock.return_value = now + 2.5
+            clock.return_value = now + 1.2
             self.snapshot_update("Медленный ответ")
             self.assertEqual(self.delivered(), [("F8", "Медленный ответ", None)])
             evidence = self.results[0][1]
             self.assertEqual(evidence["capture_stage"], "snapshot_ready")
             self.assertEqual(evidence["dispatch_ms"], 500)
-            self.assertEqual(evidence["clipboard_update_ms"], 2500)
+            self.assertEqual(evidence["clipboard_update_ms"], 1200)
         self.service._send_ctrl_c_to_active_window.assert_called_once()
+
+    def test_no_response_window_matches_the_measured_source_latency(self):
+        self.register("F8")
+        self.request(0x77)
+        self.service._send_pending_copy()
+        self.assertEqual(CLIPBOARD_COPY_TIMEOUT_SEC, 1.5)
+        remaining = self.service._pending["deadline"] - time.perf_counter()
+        self.assertAlmostEqual(remaining, CLIPBOARD_COPY_TIMEOUT_SEC, delta=0.2)
+        self.service._send_ctrl_c_to_active_window.assert_called_once()
+
+    def test_timeout_evidence_reports_answering_source(self):
+        self.service._source_ping = Mock(return_value="ok")
+        self.service._window_class = Mock(return_value="Qt5152QWindowIcon")
+        self.register("F8")
+        self.request(0x77)
+        self.service._send_pending_copy()
+        self.service._pending["deadline"] = 0
+        self.service._wait_for_clipboard_change()
+        self.assertEqual(self.delivered(), [("F8", None, "clipboard_timeout")])
+        info = self.results[0][1]
+        self.assertEqual(info["capture_stage"], "waiting_clipboard")
+        self.assertEqual(info["source_ping"], "ok")
+        self.assertIs(info["source_foreground"], True)
+        self.assertEqual(info["source_focus_class"], "Qt5152QWindowIcon")
+
+    def test_timeout_evidence_marks_source_that_left_the_foreground(self):
+        self.service._source_ping = Mock(return_value="timeout")
+        self.service._window_class = Mock(return_value="Edit")
+        self.register("F8")
+        self.request(0x77)
+        self.service._send_pending_copy()
+        self.focus = self.hwnd + 7
+        self.service._pending["deadline"] = 0
+        self.service._wait_for_clipboard_change()
+        self.assertEqual(self.delivered(), [("F8", None, "clipboard_timeout")])
+        info = self.results[0][1]
+        self.assertEqual(info["source_ping"], "timeout")
+        self.assertIs(info["source_foreground"], False)
+        self.assertEqual(info["source_focus_class"], "Edit")
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows window messages")
+    def test_source_ping_times_out_on_a_window_that_does_not_answer(self):
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32
+        user32.CreateWindowExW.argtypes = [
+            wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD,
+            ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+            wintypes.HWND, wintypes.HMENU, wintypes.HINSTANCE, wintypes.LPVOID,
+        ]
+        user32.CreateWindowExW.restype = wintypes.HWND
+        made: list[int] = []
+        started = Event()
+        release = Event()
+
+        def hold_window():
+            hwnd = user32.CreateWindowExW(0, "STATIC", None, 0, 0, 0, 0, 0, None, None, None, None)
+            made.append(hwnd)
+            started.set()
+            release.wait(3)  # The thread never pumps messages, so the window stays silent.
+            if hwnd:
+                user32.DestroyWindow(hwnd)
+
+        thread = Thread(target=hold_window, daemon=True)
+        thread.start()
+        self.assertTrue(started.wait(1))
+        hwnd = made[0] if made else 0
+        try:
+            self.assertTrue(hwnd)
+            self.assertEqual(WindowsCopyCapture._window_class(hwnd), "Static")
+            began = time.perf_counter()
+            self.assertEqual(WindowsCopyCapture._source_ping(hwnd), "timeout")
+            self.assertGreaterEqual((time.perf_counter() - began) * 1000, 50)
+        finally:
+            release.set()
+            thread.join(1)
 
     def test_confirmed_clipboard_update_can_finish_reading_after_response_deadline(self):
         self.register("F8")
@@ -492,10 +568,10 @@ class CaptureRegressions(unittest.TestCase):
         with patch("tts_app.windows_hotkey_capture.time.perf_counter", return_value=now) as clock:
             self.request(0x77)
             self.service._send_pending_copy()
-            clock.return_value = now + 2.9
+            clock.return_value = now + 1.4
             self.sequence += 1
             self.service._wait_for_clipboard_change()
-            clock.return_value = now + 3.3
+            clock.return_value = now + 1.8
             self.snapshot = self.sequence, "Текст после освобождения буфера", None
             self.service._wait_for_clipboard_change()
             self.assertEqual(self.delivered(), [("F8", "Текст после освобождения буфера", None)])
